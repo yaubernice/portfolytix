@@ -10,6 +10,7 @@ import { api, authenticatedEventStream } from "../../lib/api";
 export default function AskPage() {
   const [portfolios, setPortfolios] = useState([]);
   const [portfolioId, setPortfolioId] = useState("");
+  const [scope, setScope] = useState("market");
   const [text, setText] = useState("");
   const [asked, setAsked] = useState("");
   const [evidence, setEvidence] = useState(null);
@@ -20,7 +21,10 @@ export default function AskPage() {
   useEffect(() => {
     api("/portfolios").then((rows) => {
       setPortfolios(rows);
-      if (rows[0]) setPortfolioId(rows[0].id);
+      if (rows[0]) {
+        setPortfolioId(rows[0].id);
+        setScope("portfolio");
+      }
     }).catch((err) => setError(err.message));
   }, []);
 
@@ -36,6 +40,23 @@ export default function AskPage() {
     setEvidence(null);
     setState("thinking");
     try {
+      if (scope === "market") {
+        const body = await api("/assistant/research", {
+          method: "POST",
+          body: JSON.stringify({ question: form.get("question") }),
+          signal: controller.signal,
+        });
+        setEvidence({
+          interpretation_source: body.interpretation_source,
+          disclaimer: body.disclaimer,
+          sources: body.sources,
+          research_provider: body.research_provider,
+          model: body.model,
+        });
+        setText(body.interpretation);
+        setState("complete");
+        return;
+      }
       for await (const message of authenticatedEventStream(
         `/portfolios/${portfolioId}/ask/stream`,
         { question: form.get("question") },
@@ -72,32 +93,33 @@ export default function AskPage() {
     <>
       <Nav />
       <main id="main-content" className="content">
-        <header className="page-header"><div><p className="eyebrow">Assistant</p><h1>Ask about your portfolio</h1><p className="muted">Answers stream progressively and cite portfolio evidence.</p></div><StatusBadge value={state} /></header>
+        <header className="page-header"><div><p className="eyebrow">Assistant</p><h1>Ask Portfolytix</h1><p className="muted">Portfolio answers use your stored transactions and prices. Market research uses retrieved sources first, then organizes them into a short briefing. Source links are listed as titles, not raw addresses.</p></div><StatusBadge value={state} /></header>
         <div className="split-grid">
           <section className="panel">
             <form onSubmit={submit}>
-              <label className="field">Portfolio<select value={portfolioId} onChange={(event) => setPortfolioId(event.target.value)}>{portfolios.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
-              <label className="field">Question<textarea name="question" rows={4} maxLength={500} required placeholder="What is the overall ROE of my portfolio?" /></label>
+              <label className="field">Answer from<select value={scope} onChange={(event) => setScope(event.target.value)}><option value="market">Cited market research</option><option value="portfolio" disabled={!portfolios.length}>My portfolio</option></select></label>
+              {scope === "portfolio" ? <label className="field">Portfolio<select value={portfolioId} onChange={(event) => setPortfolioId(event.target.value)}>{portfolios.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label> : null}
+              <label className="field">Question<textarea name="question" rows={4} maxLength={500} required placeholder={scope === "market" ? "What recent developments affect semiconductor companies?" : "What is the overall ROE of my portfolio?"} /></label>
               <div className="row">
-                <button className="primary" type="submit" disabled={!portfolioId || ["thinking", "streaming"].includes(state)}>Ask Portfolytix</button>
+                <button className="primary" type="submit" disabled={(scope === "portfolio" && !portfolioId) || ["thinking", "streaming"].includes(state)}>Ask Portfolytix</button>
                 {["thinking", "streaming"].includes(state) ? <button type="button" onClick={() => controllerRef.current?.abort()}>Cancel</button> : null}
               </div>
             </form>
-            <p className="muted compact-note">Figures are calculated for this portfolio before any wording is written. Ask for a chart and the picture is drawn from those figures. A future line is not drawn. The label under the answer says whether a configured model wrote the words.</p>
+            <p className="muted compact-note">{scope === "portfolio" ? "Figures are calculated for this portfolio before any wording is written. A future line is not drawn." : "Public web results are retrieved first. The model may organize only those sources. Numbered chips in the answer open the matching source title."}</p>
             <ErrorState message={error} />
           </section>
-          <section className="panel" aria-live="polite" aria-busy={["thinking", "streaming"].includes(state)}>
+          <section className="panel answer-panel" aria-live="polite" aria-busy={["thinking", "streaming"].includes(state)}>
             <div className="panel-header"><h2>Answer</h2>{evidence?.interpretation_source ? <p className="answer-origin">{answerOrigin(evidence.interpretation_source)}</p> : null}</div>
             {state === "thinking" ? <GeneratingStatus phases={ASK_PHASES} /> : null}
-            {state === "idle" ? <p className="muted">The answer will appear here.</p> : null}
+            {state === "idle" ? <p className="muted">Ask a question to see a short briefing here.</p> : null}
             {state === "cancelled" && !text ? <p className="muted">Response cancelled. Ask again when you want to continue.</p> : null}
             {text ? <AnswerText text={text} evidence={evidence} question={asked} streaming={state === "streaming"} /> : null}
-            {evidence?.disclaimer ? <p className="muted">{evidence.disclaimer}</p> : null}
+            {evidence?.disclaimer ? <p className="muted compact-note">{evidence.disclaimer}</p> : null}
           </section>
         </div>
-        {evidence ? (
-          <details className="panel evidence-panel" open>
-            <summary>Evidence behind this answer</summary>
+        {evidence?.facts || evidence?.metrics ? (
+          <details className="panel evidence-panel">
+            <summary>Supporting figures</summary>
             <EvidenceList facts={evidence.facts} metrics={evidence.metrics} />
           </details>
         ) : null}

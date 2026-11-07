@@ -8,6 +8,7 @@ from app.schemas.watchlist import (
     WatchlistDetail,
     WatchlistItemCreate,
     WatchlistItemOut,
+    WatchlistItemUpdate,
     WatchlistPage,
     WatchlistSummary,
     WatchlistUpdate,
@@ -73,6 +74,19 @@ def add_watchlist_item(
     service: WatchlistService = Depends(get_watchlist_service),
 ) -> WatchlistItemOut:
     return service.add_item(watchlist_id, payload)
+
+
+@router.patch(
+    "/{watchlist_id}/items/{security_id}",
+    response_model=WatchlistItemOut,
+)
+def set_watchlist_target(
+    watchlist_id: UUID,
+    security_id: UUID,
+    payload: WatchlistItemUpdate,
+    service: WatchlistService = Depends(get_watchlist_service),
+) -> WatchlistItemOut:
+    return service.set_target(watchlist_id, security_id, payload)
 
 
 @router.delete(

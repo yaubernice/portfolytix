@@ -110,7 +110,7 @@ test("login is accessible and submits through the API", async ({ page }) => {
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
   await page.getByLabel("Email").fill("test@example.com");
-  await page.getByLabel("Password").fill("password123");
+  await page.locator("#auth-password").fill("password123");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
 });

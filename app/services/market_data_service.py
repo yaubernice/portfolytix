@@ -30,6 +30,7 @@ class TickerIngestResult: #result of ingesting one ticker
     upserted: int = 0
     skipped_invalid: int = 0
     error: str | None = None
+    last_day: date | None = None
 
 
 @dataclass
@@ -44,6 +45,11 @@ class IngestReport: #report of ingesting all tickers
     @property
     def failed_tickers(self) -> list[str]: #list of tickers that failed to ingest
         return [row.ticker for row in self.results if row.error]
+
+    @property
+    def last_bar_date(self) -> date | None:
+        days = [row.last_day for row in self.results if row.last_day is not None]
+        return max(days) if days else None
 
 
 @dataclass
@@ -242,6 +248,8 @@ class MarketDataService:
                 continue
             accepted.append(bar) #add the normalized bar to the list of accepted bars
         result.accepted = len(accepted)
+        if accepted:
+            result.last_day = max(bar.day for bar in accepted)
         # upsert the accepted bars into the database
         result.upserted = self.prices.upsert_bars(
             security.id,

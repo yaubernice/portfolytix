@@ -82,6 +82,10 @@ class FundamentalRepository:
         base = linked.where(
             Security.is_active.is_(True),
             ~Security.ticker.like("BENCH%"),
+            or_(
+                Fundamental.provider.is_(None),
+                Fundamental.provider != "seed",
+            ),
         )
         # Each call returns a new Select; the original is not mutated.
         filtered = _apply_filters(base, filters)

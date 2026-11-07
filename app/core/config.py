@@ -1,7 +1,56 @@
 from decimal import Decimal
 from functools import lru_cache
+from typing import Self
+from urllib.parse import unquote, urlsplit
 
+from pydantic import ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Known development and example values. Production must not sign tokens
+# or open the database with any of these.
+_DEV_JWT_SECRET = "dev-only-change-this-secret-at-least-32-bytes"
+_DEV_DATABASE_PASSWORD = "finsight"
+_PLACEHOLDER_PREFIX = "replace-with"
+_KNOWN_WEAK_SECRETS = {
+    _DEV_DATABASE_PASSWORD,
+    _DEV_JWT_SECRET,
+    "replace-with-a-long-random-secret",
+    "ollama",
+}
+
+
+def _database_password(database_url: str) -> str:
+    password = urlsplit(database_url).password
+    if password is None:
+        return ""
+    return unquote(password)
+
+
+def _is_weak_secret(value: str, *, minimum: int) -> bool:
+    text = value.strip()
+    if len(text) < minimum or len(set(text)) < 8:
+        return True
+    folded = text.lower()
+    return folded.startswith(_PLACEHOLDER_PREFIX) or folded in _KNOWN_WEAK_SECRETS
+
+
+def _require_https_origins(value: str) -> None:
+    origins = [item.strip() for item in value.split(",") if item.strip()]
+    if not origins or any(
+        "*" in origin or not origin.startswith("https://") for origin in origins
+    ):
+        raise ValueError(
+            "CORS_ORIGINS must list explicit https:// origins in production"
+        )
+
+
+def settings_error_message(exc: ValidationError) -> str:
+    """Return validation text without the submitted secret values."""
+    parts = []
+    for error in exc.errors():
+        message = str(error.get("msg", "invalid settings"))
+        parts.append(message.removeprefix("Value error, "))
+    return "; ".join(parts)
 
 
 class Settings(BaseSettings):
@@ -23,9 +72,18 @@ class Settings(BaseSettings):
     # Annual decimal, e.g. 0.05 = 5%. Used only for Sharpe. Not a forecast.
     risk_free_rate: Decimal = Decimal("0.05")
     trading_days_per_year: int = 252
-    # Market-data pipeline. Never commit a real API key.
+    # Market-data pipeline. MARKET_DATA_PROVIDER selects the adapter.
+    # MARKET_DATA_API_KEY does not. yahoo is an unofficial daily-chart
+    # source: delayed closes, not live quotes, and not a licensed feed.
     market_data_provider: str = "stooq"
     market_data_api_key: str = ""
+    # Published S&P 500 constituent file. Not every listed stock, and not
+    # an official S&P Global feed.
+    universe_code: str = "sp500"
+    universe_source_url: str = (
+        "https://raw.githubusercontent.com/datasets/"
+        "s-and-p-500-companies/master/data/constituents.csv"
+    )
     # Background jobs. Tests set SCHEDULER_ENABLED=false so TestClient
     # does not start APScheduler or call a live vendor.
     scheduler_enabled: bool = True
@@ -67,6 +125,12 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = 20.0
     # If the remote model is unavailable, retain an evidence-only local answer.
     ai_fallback_to_local: bool = True
+    # Optional cited web research. Search results become bounded evidence
+    # before the language model runs; the model never receives an HTTP tool.
+    web_research_provider: str = "none"
+    web_research_api_key: str = ""
+    web_research_max_results: int = 5
+    web_research_timeout_seconds: float = 15.0
     # Live quotes are current state in Redis. Daily bars stay in PostgreSQL.
     # simulator needs no key. finnhub streams trades. alpha_vantage polls
     # GLOBAL_QUOTE (delayed unless the key has a realtime entitlement).
@@ -104,10 +168,61 @@ class Settings(BaseSettings):
     # Portfolio marks and new trades use Yahoo's latest published price.
     provider_marks: bool = True
 
+    @model_validator(mode="after")
+    def require_production_secrets(self) -> Self:
+        # Local and test processes keep the development defaults.
+        if self.environment.strip().lower() != "production":
+            return self
+        if _is_weak_secret(self.jwt_secret_key, minimum=32):
+            raise ValueError(
+                "JWT_SECRET_KEY must be a unique random secret "
+                "of at least 32 characters in production"
+            )
+        if _is_weak_secret(_database_password(self.database_url), minimum=16):
+            raise ValueError(
+                "Database password must be a unique value "
+                "of at least 16 characters in production"
+            )
+        _require_https_origins(self.cors_origins)
+        if self.ai_provider.strip().lower() == "openai" and _is_weak_secret(
+            self.ai_api_key, minimum=20
+        ):
+            raise ValueError(
+                "AI_API_KEY must be set on the API host when AI_PROVIDER is openai"
+            )
+        if (
+            "openrouter.ai" in self.ai_base_url.lower()
+            and self.ai_openai_api.strip().lower() != "chat"
+        ):
+            raise ValueError("OpenRouter requires AI_OPENAI_API=chat")
+        if (
+            self.web_research_provider.strip().lower() == "tavily"
+            and len(self.web_research_api_key.strip()) < 8
+        ):
+            raise ValueError(
+                "WEB_RESEARCH_API_KEY must be set when "
+                "WEB_RESEARCH_PROVIDER is tavily"
+            )
+        if (
+            self.quote_provider.strip().lower() == "finnhub"
+            and len(self.finnhub_api_key.strip()) < 8
+        ):
+            raise ValueError(
+                "FINNHUB_API_KEY must be set when QUOTE_PROVIDER is finnhub"
+            )
+        return self
+
+
+def load_settings() -> Settings:
+    try:
+        return Settings()
+    except ValidationError as exc:
+        raise RuntimeError(settings_error_message(exc)) from None
+
 
 @lru_cache
 def get_settings() -> Settings: #dependency function to get the settings
-    return Settings()
+    return load_settings()
 
 
 settings = get_settings()

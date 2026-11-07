@@ -68,7 +68,7 @@ export default function PortfolioAssistant({ portfolioId }) {
   return (
     <section className="panel assistant-panel" aria-live="polite">
       <div className="panel-header">
-        <div><h2>Portfolio intelligence</h2><p className="muted">Evidence-based analysis from your portfolio data</p></div>
+        <div><h2>Ask about this portfolio</h2><p className="muted">Answers use your stored fills and prices. Try a suggested question, or write your own. Not a forecast.</p></div>
         <StatusBadge value={state} />
       </div>
       <div className="preset-row" aria-label="Suggested questions">

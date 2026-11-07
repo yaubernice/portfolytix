@@ -5,12 +5,32 @@ from fastapi import APIRouter, Body, Depends
 from fastapi.responses import StreamingResponse
 
 from app.ai.tools import SafeToolExecutor, validate_tool_call
-from app.api.dependencies import get_assistant_service, get_safe_tool_executor
-from app.schemas.assistant import AskRequest, AssistantAnswer
+from app.api.dependencies import (
+    get_assistant_service,
+    get_current_user,
+    get_market_research_service,
+    get_safe_tool_executor,
+)
+from app.db.models import User
+from app.schemas.assistant import (
+    AskRequest,
+    AssistantAnswer,
+    MarketResearchAnswer,
+)
 from app.services.assistant_service import AssistantService
+from app.services.market_research_service import MarketResearchService
 
 router = APIRouter(prefix="/portfolios/{portfolio_id}", tags=["assistant"])
 tools_router = APIRouter(prefix="/assistant", tags=["assistant"])
+
+
+@tools_router.post("/research", response_model=MarketResearchAnswer)
+def research_market(
+    payload: AskRequest,
+    _user: User = Depends(get_current_user),
+    service: MarketResearchService = Depends(get_market_research_service),
+) -> MarketResearchAnswer:
+    return service.ask(payload.question)
 
 
 @tools_router.post("/tools/execute")

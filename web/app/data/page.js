@@ -39,6 +39,8 @@ export default function DataStatusPage() {
             <h2>Providers</h2>
             <dl className="detail-list">
               <div><dt>Platform</dt><dd><StatusBadge value={system.status || "unknown"} /></dd></div>
+              <div><dt>Searchable securities</dt><dd>{system.catalog?.securities_active ?? "—"}</dd></div>
+              <div><dt>Market universe</dt><dd>{system.catalog?.universe_code || "—"} · {system.catalog?.universe_active ?? "—"} active</dd></div>
               <div><dt>Quote provider</dt><dd>{system.provider?.name || "—"}</dd></div>
               <div><dt>Historical provider</dt><dd>{system.provider?.historical_provider || "—"}</dd></div>
               <div><dt>Quotes in the store</dt><dd>{system.provider?.quote_count ?? "—"}</dd></div>
@@ -47,6 +49,7 @@ export default function DataStatusPage() {
               <div><dt>Failed symbols</dt><dd>{system.ingestion?.failed_ticker_count ?? "—"}</dd></div>
               <div><dt>Quote worker</dt><dd><StatusBadge value={system.worker ? "connected" : "unavailable"} /></dd></div>
             </dl>
+            <p className="compact-note">Search uses the US listings catalog. Daily bars and fundamentals are filled for holdings, watchlists, and any universe batch you ingest — not every listing at once.</p>
           </section>
         ) : null}
         <section className="workspace-block">

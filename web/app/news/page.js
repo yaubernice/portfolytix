@@ -52,7 +52,7 @@ function dedupe(items) {
 }
 
 export default function NewsPage() {
-  const { portfolios, portfolioId, ready, error: portfolioError } = usePortfolio();
+  const { portfolioId, ready, error: portfolioError } = usePortfolio();
   const [news, setNews] = useState(null);
   const [held, setHeld] = useState([]);
   const [watched, setWatched] = useState([]);
@@ -62,19 +62,20 @@ export default function NewsPage() {
 
   useEffect(() => {
     if (!ready) return undefined;
-    if (!portfolioId) {
-      setLoading(false);
-      return undefined;
-    }
     let cancelled = false;
     setLoading(true);
     setError("");
     async function load() {
       try {
-        const [portfolioNews, positionBody, watchPage] = await Promise.all([
-          api(`/portfolios/${portfolioId}/news`),
-          api(`/portfolios/${portfolioId}/positions`).catch(() => null),
+        const [portfolioNews, positionBody, watchPage, marketPage] = await Promise.all([
+          portfolioId
+            ? api(`/portfolios/${portfolioId}/news`)
+            : Promise.resolve({ items: [], unavailable: [], provider: "market", note: "Broader market headlines from the configured news provider." }),
+          portfolioId
+            ? api(`/portfolios/${portfolioId}/positions`).catch(() => null)
+            : Promise.resolve(null),
           api("/watchlists?limit=20").catch(() => ({ items: [] })),
+          api("/market/securities?limit=6").catch(() => ({ items: [] })),
         ]);
         const holdingTickers = (positionBody?.positions || [])
           .filter((row) => Number(row.quantity) > 0 && row.ticker)
@@ -89,7 +90,12 @@ export default function NewsPage() {
             if (ticker && !watchTickers.includes(ticker)) watchTickers.push(ticker);
           }
         }
-        const extra = watchTickers.filter((ticker) => !holdingTickers.includes(ticker)).slice(0, 4);
+        const marketTickers = (marketPage.items || [])
+          .map((row) => String(row.ticker || "").toUpperCase())
+          .filter(Boolean);
+        const extra = [...new Set([...watchTickers, ...marketTickers])]
+          .filter((ticker) => !holdingTickers.includes(ticker))
+          .slice(0, 6);
         const extraNews = await Promise.all(
           extra.map((ticker) => api(`/news?ticker=${encodeURIComponent(ticker)}`).catch(() => null)),
         );
@@ -100,6 +106,7 @@ export default function NewsPage() {
         if (cancelled) return;
         setHeld(holdingTickers);
         setWatched(watchTickers);
+        if (!holdingTickers.length) setFilter("market");
         setNews({ ...portfolioNews, items });
       } catch (err) {
         if (!cancelled) setError(err.message);
@@ -113,7 +120,9 @@ export default function NewsPage() {
     };
   }, [portfolioId, ready]);
 
-  const visible = (news?.items || []).filter((item) => storyScope(item, held, watched) === filter);
+  const visible = (news?.items || [])
+    .filter((item) => storyScope(item, held, watched) === filter)
+    .slice(0, 24);
 
   return (
     <>
@@ -123,12 +132,11 @@ export default function NewsPage() {
           <div>
             <p className="eyebrow">Reading</p>
             <h1>News</h1>
-            <p className="muted">Headlines for this portfolio and the symbols you watch. The line under a headline is the stored story text when the provider sent one. If none was stored, the line says so. Opening a story reads that article. The publisher&apos;s article stays separate.</p>
+            <p className="muted">Provider headlines for the broader market, your holdings, and symbols you watch. Opening a story can use the configured model to organize only that article&apos;s text. The publisher&apos;s article stays separate.</p>
           </div>
         </header>
         <ErrorState message={error || portfolioError} />
         {loading ? <Skeleton lines={6} label="Loading news" /> : null}
-        {!loading && ready && !portfolios.length ? <EmptyState title="No portfolios">Create a portfolio and add a buy before news can follow those stocks.</EmptyState> : null}
         {!loading && news ? (
           <section aria-labelledby="news-title">
             <div className="block-head">
@@ -147,7 +155,7 @@ export default function NewsPage() {
               <EmptyState title="Nothing in this view">
                 {filter === "holdings" ? "No headline names an open holding. A related ticker is not treated as the subject." : null}
                 {filter === "watchlist" ? "Add a symbol to a watchlist, or none of these stories name one." : null}
-                {filter === "market" ? "These stories stay inside your holdings and watchlist. Nothing here names a company outside that set." : null}
+                {filter === "market" ? "No broader-market headline is available from the configured provider yet." : null}
               </EmptyState>
             )}
           </section>

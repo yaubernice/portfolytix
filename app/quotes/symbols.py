@@ -44,17 +44,18 @@ def load_quote_symbols(
     finally:
         if owns_session:
             db.close()
+    featured = quote_symbols()
     global _fallback_logged
     if tickers:
         _fallback_logged = False
-        return tickers
+        return _merge_symbols(tickers, featured, settings.quote_max_symbols)
     if not _fallback_logged:
         logger.info(
             "quote_symbols_fallback",
             extra={"reason": "no_holdings_or_watchlists"},
         )
         _fallback_logged = True
-    return quote_symbols()
+    return featured
 
 
 def _merge_symbols(held: list[str], watched: list[str], limit: int) -> list[str]:

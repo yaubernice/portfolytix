@@ -8,6 +8,45 @@ function significantCount(unsigned) {
 
 export const SHORT_RETURN_SAMPLE = 21;
 
+export function usMarketIsOpen(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const read = (type) => parts.find((part) => part.type === type)?.value || "";
+  const weekday = read("weekday");
+  if (weekday === "Sat" || weekday === "Sun") return false;
+  const minutes = Number(read("hour")) * 60 + Number(read("minute"));
+  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
+}
+
+export function positionRefreshMs(positions, now = new Date(), sessionOpen = null) {
+  if (sessionOpen === false) return null;
+  if (sessionOpen !== true && !usMarketIsOpen(now)) return null;
+  const ages = (positions?.positions || [])
+    .map((row) => Number(row.freshness?.age_seconds))
+    .filter((value) => Number.isFinite(value));
+  if (ages.length && Math.min(...ages) > 3 * 60 * 60) return 5 * 60 * 1000;
+  return 60 * 1000;
+}
+
+export function quoteAllocation(positions) {
+  return (positions?.positions || [])
+    .filter((row) => Number(row.quantity) > 0 && row.weight != null && row.market_value != null)
+    .map((row) => ({
+      ticker: row.ticker,
+      weight: row.weight,
+      market_value: row.market_value,
+    }));
+}
+
+export function hasReturnSample(analytics) {
+  return Number(analytics?.observation_count) > 0;
+}
+
 export function volatilityNote(analytics) {
   if (analytics?.volatility == null) return "Needs at least two daily returns.";
   return shortSampleNote(analytics.observation_count, "Annualized from stored daily returns.", true);

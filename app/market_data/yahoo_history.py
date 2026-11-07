@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 import httpx
@@ -89,14 +89,42 @@ class YahooHistoryProvider(MarketDataProvider):
         self._client = client or httpx.Client(timeout=20.0)
 
     def fetch_daily_bars(self, ticker: str, start: date, end: date) -> list[RawBar]:
-        symbol = ticker.strip().upper()
-        if not symbol:
+        """Fetch one chart for ``[start, end]``. Missing days are not filled.
+
+        Yahoo's chart host is an unofficial endpoint. A class share such as
+        ``BRK.B`` is requested as ``BRK-B``. The returned bars keep the
+        caller's ticker. Closes are delayed daily bars, not live quotes.
+        """
+        requested = ticker.strip().upper()
+        if not requested:
             raise ProviderError("Yahoo history ticker is empty", retryable=False)
+        symbol = requested.replace(".", "-")
+        start_at = datetime(start.year, start.month, start.day, tzinfo=UTC)
+        end_at = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(
+            days=1
+        )
         response = self._client.get(
             YAHOO_CHART.format(symbol=symbol),
-            params={"interval": "1d", "range": "2y"},
+            params={
+                "interval": "1d",
+                "period1": int(start_at.timestamp()),
+                "period2": int(end_at.timestamp()),
+            },
             headers={"User-Agent": "Portfolytix/1.0"},
         )
+        status_code = getattr(response, "status_code", 200)
+        if status_code == 404:
+            raise ProviderError(
+                f"Yahoo history for {symbol} was not found",
+                retryable=False,
+            )
+        if status_code == 429 or status_code >= 500:
+            raise ProviderError(f"Yahoo history error for {symbol}")
+        if status_code >= 400:
+            raise ProviderError(
+                f"Yahoo history error for {symbol}",
+                retryable=False,
+            )
         try:
             response.raise_for_status()
             payload = response.json()
@@ -107,7 +135,7 @@ class YahooHistoryProvider(MarketDataProvider):
                 f"Yahoo history for {symbol} is not an object",
                 retryable=False,
             )
-        return parse_yahoo_chart(payload, symbol, start, end)
+        return parse_yahoo_chart(payload, requested, start, end)
 
 
 def _at(values: object, index: int) -> object:

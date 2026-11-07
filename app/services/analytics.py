@@ -5,8 +5,9 @@ Assumptions (also returned on the API and in the README):
 Time-weighted return (TWR)
     Daily return strips external cash so a deposit is not a gain:
     r_t = (V_t - V_{t-1} - CF_t) / V_{t-1}
-    CF_t > 0 is a BUY (contribution). CF_t < 0 is a SELL (withdrawal).
-    There is no cash sleeve: proceeds leave the portfolio.
+    A buy is external only for the part not paid from stored cash.
+    A sale stays in cash until it is withdrawn. Deposits and withdrawals
+    are external. Dividend cash is not added: closes are adjusted.
 
     total_return is the geometric product of those daily returns, not
     annualized: Π(1 + r_t) − 1.
@@ -75,6 +76,16 @@ class CloseBar: #closing price of the security on a given day
     security_id: UUID
     on: date
     close: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class Split:
+    """Shares already held are multiplied by numerator / denominator."""
+
+    on: date
+    security_id: UUID
+    numerator: Decimal
+    denominator: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,15 +293,39 @@ def allocation(
     return weighted
 
 
+def external_cash_flows(
+    rows: list[tuple[date, str, Decimal]],
+) -> list[tuple[date, Decimal]]:
+    """Deposits are positive and withdrawals negative.
+
+    Dividend rows are omitted. Adjusted closes already include that
+    adjustment, so adding the cash again would count it twice.
+    """
+    flows: list[tuple[date, Decimal]] = []
+    for day, kind, usd in rows:
+        if kind == "deposit":
+            flows.append((day, usd))
+        elif kind == "withdrawal":
+            flows.append((day, -usd))
+    return flows
+
+
 def build_value_series(
     fills: list[Fill],
     bars: list[CloseBar],
+    cash_flows: list[tuple[date, Decimal]] | None = None,
+    splits: list[Split] | None = None,
 ) -> list[ValuePoint]:
-    """Walk market days, mark holdings, strip cash flows from TWR."""
-    if not fills:
+    """Walk market days, mark holdings, and strip external cash from TWR.
+
+    Stored cash pays for a buy before the rest of that buy is treated as
+    new money. Sale proceeds stay in cash. ``cash_flows`` are deposits
+    and withdrawals only.
+    """
+    if not fills and not cash_flows:
         return []
 
-    index = PriceIndex(bars) 
+    index = PriceIndex(bars)
     fills_by_day: dict[date, list[Fill]] = {}
     fallback_price: dict[UUID, Decimal] = {}
     tickers: dict[UUID, str] = {}
@@ -298,39 +333,72 @@ def build_value_series(
         fills_by_day.setdefault(fill.on, []).append(fill)
         fallback_price[fill.security_id] = fill.price
         tickers[fill.security_id] = fill.ticker
+    external_by_day: dict[date, Decimal] = {}
+    for day, amount in cash_flows or []:
+        external_by_day[day] = external_by_day.get(day, ZERO) + amount
+    splits_by_day: dict[date, list[Split]] = {}
+    for split in splits or []:
+        splits_by_day.setdefault(split.on, []).append(split)
 
-    first_day = min(fill.on for fill in fills)
+    dated = set(fills_by_day) | set(external_by_day) | set(splits_by_day)
+    first_day = min(dated) if dated else None
+    if first_day is None:
+        return []
     calendar = sorted(
-        {day for day in index.all_dates() if day >= first_day} | set(fills_by_day)
+        {day for day in index.all_dates() if day >= first_day} | dated
     )
 
     holdings: dict[UUID, Decimal] = {}
+    cash_balance = ZERO
+    pending_external = ZERO
+    pending_trade = ZERO
     previous_value: Decimal | None = None
     wealth = ONE
     peak = ONE
     points: list[ValuePoint] = []
 
     for on in calendar:
-        cash_flow = ZERO
+        external = external_by_day.get(on, ZERO)
+        incoming = external if external > ZERO else ZERO
+        outgoing = external if external < ZERO else ZERO
+        cash_balance += incoming
+        trade_external = ZERO
+        for split in splits_by_day.get(on, []):
+            held = holdings.get(split.security_id)
+            if held is None or split.denominator == ZERO:
+                continue
+            holdings[split.security_id] = (
+                held * split.numerator / split.denominator
+            )
         for fill in fills_by_day.get(on, []):
-            cash_flow += fill.cash_flow
+            notional = fill.quantity * fill.price
             fallback_price[fill.security_id] = fill.price
             tickers[fill.security_id] = fill.ticker
+            if fill.is_buy:
+                funded = min(max(cash_balance, ZERO), notional)
+                cash_balance -= funded
+                trade_external += notional - funded
+            else:
+                cash_balance += notional
             current = holdings.get(fill.security_id, ZERO) + fill.signed_quantity
             if current == ZERO:
                 holdings.pop(fill.security_id, None)
             else:
                 holdings[fill.security_id] = current
+        cash_balance += outgoing
 
-        if not holdings:
-            if previous_value is None:
-                continue
-            value = ZERO
-        else:
+        if holdings:
             marked = _mark_to_market(holdings, on, index, fallback_price)
             if marked is None:
+                pending_external += external
+                pending_trade += trade_external
                 continue
-            value = marked
+        else:
+            marked = ZERO
+        cash_flow = pending_external + pending_trade + external + trade_external
+        pending_external = ZERO
+        pending_trade = ZERO
+        value = marked + cash_balance
 
         daily: Decimal | None = None
         daily_pl = daily_profit_loss(previous_value, value, cash_flow)

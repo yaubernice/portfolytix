@@ -87,10 +87,10 @@ def refresh_news(source: object, store: RedisQuoteStore, symbols: list[str]) -> 
                 items = source.fetch_news(symbol, start, end)
             else:
                 items = source.fetch_news(symbol)
-        except (ProviderError, TypeError) as exc:
+        except Exception as exc:
             logger.warning(
                 "news_refresh_failed",
-                extra={"ticker": symbol, "error": str(exc)},
+                extra={"ticker": symbol, "error": type(exc).__name__},
             )
             continue
         try:
@@ -262,7 +262,10 @@ def run_provider_mark_loop(store: RedisQuoteStore) -> None:
 def run() -> None:
     setup_logging(settings.log_level)
     store = build_worker_store()
-    if settings.provider_marks:
+    if (
+        settings.provider_marks
+        and settings.quote_provider.strip().lower() == "yahoo"
+    ):
         symbols = load_quote_symbols()
         logger.info(
             "quote_worker_started",
@@ -270,7 +273,10 @@ def run() -> None:
         )
         news = build_news_source()
         if news is not None:
-            refresh_news(news, store, symbols)
+            try:
+                refresh_news(news, store, symbols)
+            except Exception:
+                logger.warning("news_refresh_aborted")
         run_provider_mark_loop(store)
         return
     source = build_quote_source()

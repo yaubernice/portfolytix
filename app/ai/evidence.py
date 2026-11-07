@@ -774,7 +774,7 @@ def direct_answer(question: str, evidence: dict[str, Any]) -> str | None:
     """Deterministic answer for questions the evidence can settle."""
     text = " ".join(question.lower().split())
     if _mentions(text, "news", "headline", "story", "stories"):
-        return _news_answer(evidence)
+        return _news_answer(evidence, question)
     if _is_ungrounded(text):
         return _limits_answer(evidence)
     if _is_forecast(text):
@@ -823,15 +823,27 @@ def finalize_interpretation(text: str, evidence: dict[str, Any]) -> str:
     """Drop invented citations and numbers the evidence does not support."""
     direct = scrub_citations(str(evidence.get("direct_answer") or "").strip(), evidence)
     body = scrub_citations(text.strip(), evidence)
+    if evidence.get("citation_required"):
+        body = _cited_claims_only(body)
+        if not body:
+            # Keep a grounded portfolio answer when web citations add nothing.
+            if direct:
+                return direct
+            return "The retrieved sources do not support a cited answer."
     if direct and _same_words(body, direct):
         return direct
     if direct and _closed(direct):
         return direct
     allowed = _allowed_numbers(evidence)
     _add_numbers(direct, allowed)
-    extra = _safe_extra(body, direct, allowed)
     if "\n" in direct:
+        # Keep only the model text after the calculated news block so a
+        # briefing line is not glued to a headline bullet and discarded.
+        suffix = _text_after(body, direct)
+        extra = _safe_extra(suffix, "", allowed) if suffix else ""
         extra = _without_repeated_headlines(extra, direct, evidence)
+    else:
+        extra = _safe_extra(body, direct, allowed)
     if not direct:
         return extra or ("The evidence does not establish a figure for that question.")
     if not extra or extra in direct or _same_words(extra, direct):
@@ -839,6 +851,27 @@ def finalize_interpretation(text: str, evidence: dict[str, Any]) -> str:
     if direct in extra:
         return extra
     return f"{direct}\n\n{extra}"
+
+
+def _text_after(body: str, direct: str) -> str:
+    """Return model text that follows the calculated direct_answer block."""
+    full = body.strip()
+    lead = direct.strip()
+    if not full or not lead:
+        return full
+    if full.startswith(lead):
+        return full[len(lead) :].strip()
+    index = full.find(lead)
+    if index >= 0:
+        return full[index + len(lead) :].strip()
+    return ""
+
+
+def _cited_claims_only(text: str) -> str:
+    """For external research, keep only sentences carrying an evidence id."""
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    cited = [part.strip() for part in parts if _CITE.search(part)]
+    return " ".join(cited)
 
 
 def scrub_citations(text: str, evidence: dict[str, Any]) -> str:
@@ -1119,6 +1152,7 @@ _ADVERSE_EVENT = re.compile(
     r"delay|delays|delayed|"
     r"decline|declines|declined|declining|"
     r"drop|drops|dropped|loss|losses|"
+    r"down|selloff|sell-off|plunge|plunged|slump|slumped|"
     r"warning|warns|warned|"
     r"disappoints|disappointed|disappointing|"
     r"crash|crashed|scandal|weakness"
@@ -1127,7 +1161,7 @@ _ADVERSE_EVENT = re.compile(
 )
 
 
-def _news_answer(evidence: dict[str, Any]) -> str:
+def _news_answer(evidence: dict[str, Any], question: str = "") -> str:
     groups = _headline_groups(evidence)
     if not groups:
         return (
@@ -1149,12 +1183,18 @@ def _news_answer(evidence: dict[str, Any]) -> str:
         finding = "One stored headline names a difficult event."
     else:
         finding = "Some stored headlines name a difficult event."
-    lines = [
-        finding,
-        "",
-        "A headline is not a forecast of a future move.",
-        "",
-    ]
+    lines: list[str] = []
+    status = _named_holding_status(question, evidence)
+    if status:
+        lines.extend([status, ""])
+    lines.extend(
+        [
+            finding,
+            "",
+            "A headline is not a forecast of a future move.",
+            "",
+        ]
+    )
     for ticker, items in groups:
         lines.append(ticker)
         for item in items:
@@ -1164,6 +1204,29 @@ def _news_answer(evidence: dict[str, Any]) -> str:
             lines.append(f"- {item['value']}{_cite(item)}{note}")
         lines.append("")
     return "\n".join(lines).strip()
+
+
+def _named_holding_status(question: str, evidence: dict[str, Any]) -> str:
+    """When the question names a holding, state its stored day move if present."""
+    text = f" {question.lower()} "
+    if not re.search(r"\b(how is|doing|currently|perform)\b", text):
+        return ""
+    parts: list[str] = []
+    for item in evidence.get("metrics", []):
+        name = str(item.get("name", ""))
+        if not name.startswith("day_change:"):
+            continue
+        ticker = name.split(":", 1)[1]
+        if not re.search(rf"\b{re.escape(ticker.lower())}\b", text):
+            continue
+        value = item.get("value")
+        if value in {None, "", "undefined", "unavailable"}:
+            continue
+        parts.append(
+            f"{ticker} day change is {value}.{_cite(item)} "
+            "That figure is a delayed provider print, not a forecast."
+        )
+    return " ".join(parts)
 
 
 def _headline_groups(
@@ -1215,7 +1278,10 @@ def attach_headlines(
                 "provider",
                 seq=seq,
                 label=f"{ticker} headline",
-                method="Provider headline stored for this holding. Not a forecast.",
+                method=(
+                    "Provider headline and summary stored for this holding. "
+                    "Not a forecast."
+                ),
             )
         )
     return evidence
@@ -1378,19 +1444,17 @@ def _without_repeated_headlines(
     direct: str,
     evidence: dict[str, Any],
 ) -> str:
-    """Drop model sentences that repeat a section or paste a headline."""
+    """Drop model sentences that paste a headline; keep cited commentary."""
     direct_folded = " ".join(direct.lower().split())
-    news_ids = {
-        str(item.get("id", ""))
-        for item in evidence.get("facts", [])
-        if str(item.get("name", "")).startswith("news:") and item.get("id")
-    }
     snippets = []
     for item in evidence.get("facts", []):
         if not str(item.get("name", "")).startswith("news:"):
             continue
         folded = " ".join(str(item.get("value", "")).lower().split())
-        if len(folded) >= 24:
+        headline = folded.split(" — ", 1)[0].strip()
+        if len(headline) >= 24:
+            snippets.append(headline[:48])
+        elif len(folded) >= 24:
             snippets.append(folded[:48])
     kept: list[str] = []
     for sentence in re.split(r"(?<=[.!?])\s+", extra.strip()):
@@ -1398,7 +1462,8 @@ def _without_repeated_headlines(
         folded = " ".join(cleaned.lower().split())
         if not folded or folded in direct_folded:
             continue
-        if any(f"[{item_id}]" in cleaned for item_id in news_ids):
+        bare = _CITE.sub("", folded).strip(" .,-:;\"'")
+        if len(bare) < 18:
             continue
         if any(snippet in folded for snippet in snippets):
             continue

@@ -4,13 +4,47 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_quote_store
+from app.api.dependencies import get_market_research_service, get_quote_store
 from app.core.security import create_access_token
 from app.db.models import Fundamental, Price, Security, User
 from app.main import app
 from app.quotes.models import quote_from_parts
 from app.quotes.store import MemoryQuoteStore
+from app.schemas.assistant import MarketResearchAnswer, MarketResearchSource
 from tests.api.helpers import create_portfolio
+
+
+class _ResearchService:
+    def ask(self, question: str) -> MarketResearchAnswer:
+        return MarketResearchAnswer(
+            question=question,
+            interpretation="A cited research answer. [e1]",
+            interpretation_source="llm",
+            research_provider="test-search",
+            model="test-model",
+            sources=[
+                MarketResearchSource(
+                    id="e1",
+                    title="Source",
+                    url="https://example.test/source",
+                    publisher="example.test",
+                )
+            ],
+            disclaimer="Verify important facts.",
+        )
+
+
+def test_market_research_does_not_require_a_portfolio(client: TestClient) -> None:
+    app.dependency_overrides[get_market_research_service] = lambda: _ResearchService()
+    response = client.post(
+        "/assistant/research",
+        json={"question": "What changed in the market?"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["research_provider"] == "test-search"
+    assert body["sources"][0]["id"] == "e1"
+    assert body["interpretation_source"] == "llm"
 
 
 def test_ask_separates_facts_metrics_and_interpretation(

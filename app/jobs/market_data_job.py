@@ -46,6 +46,7 @@ def run_market_data_ingest(
     start: date,
     end: date,
     provider: MarketDataProvider | None = None,
+    max_securities: int | None = None,
 ) -> IngestReport:
     # use the given provider, otherwise build one from config
     adapter = provider or build_provider()
@@ -62,6 +63,7 @@ def run_market_data_ingest(
         security_ids=security_ids,
         exchange=exchange,
         country=country,
+        max_securities=max_securities,
     )
 
 
@@ -76,6 +78,8 @@ def update_market_data(
     end: date | None = None,
     provider: MarketDataProvider | None = None,
     trigger: JobTrigger | str = JobTrigger.SCHEDULER, #records how the job started
+    universe: str | None = None,
+    symbol_limit: int | None = None,
 ) -> JobRun:
     """Run ingest and persist a ``job_runs`` row.
 
@@ -95,6 +99,49 @@ def update_market_data(
         )
         # drop cached ORM state so the next load comes from the database
         session.expire_all()
+
+    if universe:
+        from app.market_data.universe import tickers_for_ingest
+
+        cap = (
+            settings.market_data_max_securities
+            if symbol_limit is None
+            else symbol_limit
+        )
+        tickers = tickers_for_ingest(session, universe, cap)
+        if not tickers:
+            get_metrics().increment("ingestion.skipped")
+            skipped = _new_run(
+                trigger=trigger_value,
+                status=JobStatus.SKIPPED,
+                error=f"universe_empty:{universe}",
+            )
+            jobs.add(skipped)
+            logger.warning(
+                "job_skipped",
+                extra={"job_name": JOB_NAME, "reason": "universe_empty"},
+            )
+            return skipped
+
+    if (
+        tickers is not None
+        and len(tickers) == 0
+        and not security_ids
+        and not exchange
+        and not country
+    ):
+        get_metrics().increment("ingestion.skipped")
+        skipped = _new_run(
+            trigger=trigger_value,
+            status=JobStatus.SKIPPED,
+            error="no_holdings_or_watchlists",
+        )
+        jobs.add(skipped)
+        logger.warning(
+            "job_skipped",
+            extra={"job_name": JOB_NAME, "reason": "no_holdings_or_watchlists"},
+        )
+        return skipped
 
     live = jobs.get_running(JOB_NAME) #check if the job is already running
     if live is not None:
@@ -160,13 +207,14 @@ def update_market_data(
             start=window_start,
             end=window_end,
             provider=adapter,
+            max_securities=symbol_limit,
         )
     except Exception as exc: #changes JobRun to failed status
         get_metrics().increment("ingestion.failed")
         _finish(
             run,
             status=JobStatus.FAILED,
-            error=str(exc),
+            error=_safe_error(exc),
         )
         logger.exception(
             "job_failed",
@@ -250,13 +298,23 @@ def _apply_report(run: JobRun, report: IngestReport) -> None:
     run.symbols_omitted = report.symbols_omitted
     run.provider = report.provider
     if report.failed_tickers:
+        details = [
+            f"{row.ticker}={row.error}" for row in report.results if row.error
+        ]
         _finish(
             run,
             status=JobStatus.FAILED,
-            error="ticker_failures:" + ",".join(report.failed_tickers),
+            error="ticker_failures:" + ",".join(details),
         )
         return
     _finish(run, status=JobStatus.SUCCESS)
+
+
+def _safe_error(exc: Exception) -> str:
+    message = str(exc)
+    if "://" in message or "@" in message:
+        return f"{type(exc).__name__}: failure (connection details omitted)"
+    return message[:500]
 
 
 def _finish(run: JobRun, *, status: JobStatus, error: str | None = None) -> None:

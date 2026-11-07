@@ -97,7 +97,7 @@ class OpenAIResponsesModel:
     def summarize_story(self, headline: str, text: str) -> dict:
         raw = self._complete(
             _STORY_INSTRUCTION,
-            json.dumps({"headline": headline, "article": text[:2400]}),
+            json.dumps({"headline": headline, "article": text[:5000]}),
             schema_name="story_summary",
             schema=story_json_schema(),
         )
@@ -239,7 +239,7 @@ class OpenAIResponsesModel:
         url = f"{self._base_url}/responses"
         if self._client is not None:
             return self._client.post(url, json=payload, headers=headers)
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, trust_env=False) as client:
             return client.post(url, json=payload, headers=headers)
 
     @contextmanager
@@ -259,7 +259,7 @@ class OpenAIResponsesModel:
             with request as response:
                 yield response
             return
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, trust_env=False) as client:
             with client.stream("POST", url, json=payload, headers=headers) as response:
                 yield response
 

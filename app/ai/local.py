@@ -58,9 +58,11 @@ class LocalAssistant:
 
     def summarize_story(self, headline: str, text: str) -> dict:
         sentences = _sentences(text)
-        about = " ".join(sentences[:2])
-        points = sentences[2:5] or sentences[:1]
-        return {"about": about[:400], "points": points[:3], "headline": headline}
+        about = " ".join(sentences[:2])[:420]
+        points = [
+            sentence[:360] for sentence in (sentences[2:5] or sentences[:1])
+        ]
+        return {"about": about, "points": points[:3], "headline": headline}
 
     def explain_term(self, term: str, evidence: dict) -> dict:
         # No invented formula and no invented portfolio number. A configured

@@ -31,10 +31,16 @@ def run_scheduled_update_market_data() -> None:
             session,
             limit=settings.market_data_max_securities,
         )
-        logger.info(
-            "scheduled_history_symbols",
-            extra={"count": len(tickers)},
-        )
+        if tickers:
+            logger.info(
+                "scheduled_history_symbols",
+                extra={"count": len(tickers)},
+            )
+        else:
+            logger.warning(
+                "scheduled_history_empty",
+                extra={"reason": "no_holdings_or_watchlists"},
+            )
         update_market_data(session, tickers=tickers, trigger="scheduler")
         commit_and_invalidate(session, get_cache())
     except Exception:

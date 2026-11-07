@@ -13,6 +13,7 @@ from app.schemas.watchlist import (
     WatchlistDetail,
     WatchlistItemCreate,
     WatchlistItemOut,
+    WatchlistItemUpdate,
     WatchlistPage,
     WatchlistSummary,
     WatchlistUpdate,
@@ -101,6 +102,29 @@ class WatchlistService:
         saved.security = security
         return self._item(saved)
 
+    def set_target(
+        self,
+        watchlist_id: UUID,
+        security_id: UUID,
+        payload: WatchlistItemUpdate,
+    ) -> WatchlistItemOut:
+        watchlist = self._require(watchlist_id)
+        item = self.watchlists.find_item(watchlist.id, security_id)
+        if item is None:
+            raise NotFoundError(
+                f"Security {security_id} is not on watchlist {watchlist_id}"
+            )
+        if payload.clear_target or (
+            payload.target_price is None and payload.alert_when is None
+        ):
+            item.target_price = None
+            item.alert_when = None
+        else:
+            item.target_price = payload.target_price
+            item.alert_when = payload.alert_when
+        self.session.flush()
+        return self._item(item)
+
     def remove_item(self, watchlist_id: UUID, security_id: UUID) -> None:
         watchlist = self._require(watchlist_id)
         item = self.watchlists.find_item(watchlist.id, security_id)
@@ -133,5 +157,7 @@ class WatchlistService:
             ticker=security.ticker,
             name=security.name,
             exchange=security.exchange,
+            target_price=item.target_price,
+            alert_when=item.alert_when,
             created_at=item.created_at,
         )

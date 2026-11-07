@@ -99,7 +99,9 @@ def test_open_holding_is_quoted_without_a_watchlist(
         )
     )
     sqlite_session.flush()
-    assert load_quote_symbols(sqlite_session) == ["IBM"]
+    quoted = load_quote_symbols(sqlite_session)
+    assert quoted[0] == "IBM"
+    assert "AAPL" in quoted
     assert load_book_symbols(sqlite_session, limit=25) == ["IBM"]
 
 

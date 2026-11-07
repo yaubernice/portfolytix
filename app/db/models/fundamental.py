@@ -79,6 +79,7 @@ class Fundamental(Base):
     revenue: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     profit_margin: Mapped[Decimal | None] = mapped_column(_RATIO, nullable=True)
     dividend_yield: Mapped[Decimal | None] = mapped_column(_RATIO, nullable=True)
+    expense_ratio: Mapped[Decimal | None] = mapped_column(_RATIO, nullable=True)
     beta: Mapped[Decimal | None] = mapped_column(_RATIO, nullable=True)
     ebitda: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     shares_outstanding: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)

@@ -39,6 +39,25 @@ class AllocationOut(BaseModel):
     weight: DecimalStr = Field(description="Market value / portfolio market value")
 
 
+class BenchmarkPoint(BaseModel):
+    date: date
+    indexed_return: DecimalStr
+
+
+class CorrelationOut(BaseModel):
+    ticker: str
+    observations: int
+    versus: str = "portfolio"
+    value: OptionalDecimalStr = None
+
+
+class PairCorrelationOut(BaseModel):
+    left: str
+    right: str
+    observations: int
+    value: OptionalDecimalStr = None
+
+
 class AnalyticsOut(BaseModel):
     portfolio_id: UUID
     start_date: date | None
@@ -60,4 +79,10 @@ class AnalyticsOut(BaseModel):
     )
     allocation: list[AllocationOut]
     series: list[SeriesPoint]
+    benchmark_ticker: str | None = None
+    benchmark_return: OptionalDecimalStr = None
+    benchmark_beta: OptionalDecimalStr = None
+    benchmark: list[BenchmarkPoint] = Field(default_factory=list)
+    correlations: list[CorrelationOut] = Field(default_factory=list)
+    correlation_pairs: list[PairCorrelationOut] = Field(default_factory=list)
     assumptions: AnalyticsAssumptions

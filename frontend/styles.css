@@ -1,11 +1,11 @@
 :root {
   color-scheme: light;
-  --ink: #1c1915;
-  --muted: #5c564c;
-  --line: #d9d1c3;
-  --paper: #f6f1e8;
-  --card: #fffdf8;
-  --accent: #1f4d3a;
+  --ink: #0f1c2e;
+  --muted: #5a6b82;
+  --line: #c9d7e6;
+  --paper: #eaf1f8;
+  --card: #f8fbfe;
+  --accent: #e86f4c;
 }
 
 * {
@@ -47,7 +47,7 @@ textarea {
 button {
   cursor: pointer;
   background: var(--accent);
-  color: #f6f1e8;
+  color: #fff;
   border-color: var(--accent);
 }
 
@@ -60,7 +60,7 @@ nav button {
 
 nav button.active {
   background: var(--accent);
-  color: #f6f1e8;
+  color: #fff;
   border-color: var(--accent);
 }
 

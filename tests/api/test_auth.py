@@ -123,6 +123,23 @@ def test_register_rejects_invalid_payload(
     assert client.post("/auth/register", json=payload).status_code == 422
 
 
+def test_export_returns_pdf(client: TestClient) -> None:
+    created = client.post("/portfolios", json={"name": "Export book"})
+    assert created.status_code == 201, created.text
+
+    response = client.get("/auth/export")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert "portfolytix-report.pdf" in response.headers.get("content-disposition", "")
+    assert response.content[:4] == b"%PDF"
+
+    backup = client.get("/auth/export.json")
+    assert backup.status_code == 200, backup.text
+    body = backup.json()
+    assert body["email"] == "alice@example.com"
+    assert any(row["name"] == "Export book" for row in body["portfolios"])
+
+
 def test_expired_token_is_rejected(client: TestClient, user: User) -> None:
     now = datetime.now(UTC)
     token = jwt.encode(

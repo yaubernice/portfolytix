@@ -21,6 +21,10 @@ class EvidenceItem(BaseModel):
     as_of: str = ""
     unit: str = ""
     availability: Literal["available", "unavailable"] = "available"
+    title: str = ""
+    url: str = ""
+    publisher: str = ""
+    published_at: str = ""
 
 
 class AssistantAnswer(BaseModel):
@@ -30,4 +34,22 @@ class AssistantAnswer(BaseModel):
     metrics: list[EvidenceItem]
     interpretation: str
     interpretation_source: Literal["template", "llm"]
+    disclaimer: str
+
+
+class MarketResearchSource(BaseModel):
+    id: str
+    title: str
+    url: str
+    publisher: str
+    published_at: str = ""
+
+
+class MarketResearchAnswer(BaseModel):
+    question: str
+    interpretation: str
+    interpretation_source: Literal["template", "llm"]
+    research_provider: str
+    model: str
+    sources: list[MarketResearchSource]
     disclaimer: str

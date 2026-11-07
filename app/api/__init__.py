@@ -10,6 +10,9 @@ from app.api.routes import (
     holdings,
     jobs,
     learning,
+    ledger,
+    market,
+    planning,
     portfolios,
     positions,
     quotes,
@@ -26,9 +29,11 @@ def register_routes(app: FastAPI) -> None:
     """Attach HTTP routers. Handlers stay thin; services own domain logic."""
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(planning.router)
     app.include_router(portfolios.router)
     app.include_router(watchlists.router)
     app.include_router(transactions.router)
+    app.include_router(ledger.router)
     app.include_router(holdings.router)
     app.include_router(positions.router)
     app.include_router(analytics.router)
@@ -37,6 +42,7 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(assistant.router)
     app.include_router(assistant.tools_router)
     app.include_router(jobs.router)
+    app.include_router(market.router)
     app.include_router(screening.router)
     app.include_router(research.router)
     app.include_router(learning.router)

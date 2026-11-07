@@ -5,7 +5,9 @@ import { useParams } from "next/navigation";
 import LearnTerm from "../../../components/LearnTerm";
 import Nav from "../../../components/Nav";
 import NewsList from "../../../components/NewsList";
+import { useDisplayCurrency } from "../../../components/DisplayCurrency";
 import {
+  ageLabel,
   CompanyLogo,
   dateTime,
   EmptyState,
@@ -32,13 +34,6 @@ function quoteStatus(quote) {
   return { label: "Unavailable", tone: "unavailable" };
 }
 
-function ageLabel(seconds) {
-  const value = Number(seconds);
-  if (!Number.isFinite(value)) return "unknown age";
-  if (value < 60) return `${Math.round(value)}s old`;
-  if (value < 3600) return `${Math.round(value / 60)}m old`;
-  return `${Math.round(value / 3600)}h old`;
-}
 
 function Metric({ label, value, learn, ticker }) {
   const shown = learn ? <LearnTerm slug={learn} ticker={ticker}>{label}</LearnTerm> : label;
@@ -75,6 +70,7 @@ function HistoryChart({ prices, ticker }) {
 export default function SecurityPage() {
   const params = useParams();
   const ticker = String(params?.ticker || "").toUpperCase();
+  const { money: displayMoney } = useDisplayCurrency();
   const [period, setPeriod] = useState("1M");
   const [profile, setProfile] = useState(null);
   const [news, setNews] = useState(null);
@@ -89,6 +85,9 @@ export default function SecurityPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState({ message: "", tone: "success" });
+  const [holding, setHolding] = useState(null);
+  const [lots, setLots] = useState([]);
+  const [notes, setNotes] = useState([]);
 
   const load = useCallback(async (selectedPeriod, initial = false) => {
     if (!ticker) return;
@@ -159,6 +158,32 @@ export default function SecurityPage() {
       setSubmitting(false);
     }
   }
+
+  useEffect(() => {
+    if (!portfolioId || !ticker) {
+      setHolding(null);
+      setLots([]);
+      setNotes([]);
+      return undefined;
+    }
+    let cancelled = false;
+    Promise.all([
+      api(`/portfolios/${portfolioId}/positions`),
+      api(`/portfolios/${portfolioId}/behavior`).catch(() => null),
+    ]).then(([positions, behavior]) => {
+      if (cancelled) return;
+      setHolding((positions.positions || []).find((row) => row.ticker === ticker) || null);
+      setLots((positions.lots || []).filter((row) => row.ticker === ticker));
+      setNotes((behavior?.entries || []).filter((row) => row.ticker === ticker));
+    }).catch(() => {
+      if (!cancelled) {
+        setHolding(null);
+        setLots([]);
+        setNotes([]);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [portfolioId, ticker]);
 
   async function addToPortfolio(event) {
     event.preventDefault();
@@ -240,6 +265,38 @@ export default function SecurityPage() {
               </div>
 
               <aside className="stack" aria-label="Security actions">
+                <section className="panel">
+                  <h2>Your position</h2>
+                  {!portfolioId ? <p className="compact-note">Choose a portfolio to see whether you hold this name.</p> : null}
+                  {portfolioId && !holding ? <EmptyState title="No open position">This portfolio does not hold {ticker}.</EmptyState> : null}
+                  {holding ? (
+                    <dl className="detail-list">
+                      <Metric label="Shares" value={number(holding.quantity, { maximumFractionDigits: 4 })} />
+                      <Metric label="Average cost" value={displayMoney(holding.average_cost)} />
+                      <Metric label="Market value" value={displayMoney(holding.market_value)} />
+                      <Metric label="Unrealized P/L" value={displayMoney(holding.unrealized_pl)} />
+                      <Metric label="Weight" value={percent(holding.weight)} />
+                    </dl>
+                  ) : null}
+                  {lots.length ? (
+                    <>
+                      <h3>Lots</h3>
+                      <ul className="compact-note">{lots.map((row) => (
+                        <li key={`${row.status}-${row.opened_at}-${row.quantity}`}>
+                          {row.status} {number(row.quantity, { maximumFractionDigits: 4 })} @ {displayMoney(row.cost_price)}
+                          {row.holding_period ? ` · ${row.holding_period}` : ""}
+                          {row.held_days != null ? ` · ${row.held_days}d` : ""}
+                        </li>
+                      ))}</ul>
+                    </>
+                  ) : null}
+                  {notes.length ? (
+                    <>
+                      <h3>Your notes</h3>
+                      <ul className="compact-note">{notes.map((row) => <li key={row.id}>{row.note}</li>)}</ul>
+                    </>
+                  ) : <p className="compact-note">Journal notes for this ticker appear on the portfolio page.</p>}
+                </section>
                 <section className="panel"><h2>Add to watchlist</h2>{watchlists.length ? <form onSubmit={addToWatchlist}><label className="field">Watchlist<select value={watchlistId} onChange={(event) => setWatchlistId(event.target.value)}>{watchlists.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><button className="primary" disabled={submitting} type="submit">Add {ticker}</button></form> : <EmptyState title="No watchlists">Create a watchlist before adding this security.</EmptyState>}</section>
                 <section className="panel"><h2>Trade</h2>{portfolios.length ? <form onSubmit={addToPortfolio}><label className="field">Portfolio<select value={portfolioId} onChange={(event) => setPortfolioId(event.target.value)}>{portfolios.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><div className="row" role="group" aria-label="Order side"><button type="button" aria-pressed={side === "BUY"} onClick={() => setSide("BUY")}>Buy</button><button type="button" aria-pressed={side === "SELL"} onClick={() => setSide("SELL")}>Sell</button></div><label className="field">Shares<input type="number" min="1" step="1" inputMode="numeric" required value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label><p className="muted">Price {tradePrice != null ? money(tradePrice, profile.currency) : "unavailable"}. This is the latest provider quote for one share. Orders are whole shares, and the smallest order is 1 share.</p><button className="primary" disabled={submitting || tradePrice == null} type="submit">{side === "SELL" ? "Sell" : "Buy"} {ticker}</button></form> : <EmptyState title="No portfolios">Create a portfolio before adding a transaction.</EmptyState>}</section>
                 <section className="panel"><h2>Reference metadata</h2><dl className="detail-list"><Metric label="Asset type" value={profile.asset_type} /><Metric label="Industry" value={profile.industry || "—"} /><Metric label="Country" value={profile.country || "—"} /><Metric label="MIC" value={profile.mic || "—"} /><Metric label="Profile provider" value={profile.provider} /><Metric label="Provider symbol" value={profile.provider_symbol || "—"} /></dl></section>

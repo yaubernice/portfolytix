@@ -24,7 +24,7 @@ def easter_sunday(year: int) -> date:
     return date(year, month, day_index + 1)
 
 
-def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+def nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
     first = date(year, month, 1)
     offset = (weekday - first.weekday()) % 7
     return first + timedelta(days=offset + 7 * (n - 1))
@@ -53,15 +53,15 @@ def us_market_holidays(start_year: int, end_year: int) -> set[date]:
     holidays: set[date] = set()
     for year in range(start_year, end_year + 1):
         holidays.add(_observed(date(year, 1, 1)))
-        holidays.add(_nth_weekday(year, 1, 0, 3))
-        holidays.add(_nth_weekday(year, 2, 0, 3))
+        holidays.add(nth_weekday(year, 1, 0, 3))
+        holidays.add(nth_weekday(year, 2, 0, 3))
         holidays.add(easter_sunday(year) - timedelta(days=2))
         holidays.add(_last_weekday(year, 5, 0))
         if year >= 2022:
             holidays.add(_observed(date(year, 6, 19)))
         holidays.add(_observed(date(year, 7, 4)))
-        holidays.add(_nth_weekday(year, 9, 0, 1))
-        holidays.add(_nth_weekday(year, 11, 3, 4))
+        holidays.add(nth_weekday(year, 9, 0, 1))
+        holidays.add(nth_weekday(year, 11, 3, 4))
         holidays.add(_observed(date(year, 12, 25)))
     return holidays
 

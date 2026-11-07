@@ -220,6 +220,27 @@ def test_market_prediction_is_not_given_a_number() -> None:
     assert "no forecast is given" in cleaned.lower()
 
 
+def test_empty_web_citations_keep_a_portfolio_direct_answer() -> None:
+    evidence = _evidence([("AAPL", "1", "110")])
+    for item in evidence["metrics"]:
+        if item["name"] == "volatility_change":
+            item["value"] = "insufficient_history"
+    text = direct_answer(
+        "Why did my portfolio volatility increase this month?",
+        evidence,
+    )
+    assert text is not None
+    assert "not enough daily returns" in text
+    evidence["direct_answer"] = text
+    evidence["citation_required"] = True
+    cleaned = finalize_interpretation(
+        "Outside commentary without a citation marker.",
+        evidence,
+    )
+    assert "not enough daily returns" in cleaned
+    assert "retrieved sources do not support" not in cleaned
+
+
 def test_news_question_uses_a_stored_headline_only() -> None:
     evidence = _evidence([("AAPL", "1", "110")])
     evidence["facts"].append(
@@ -245,6 +266,34 @@ def test_news_question_uses_a_stored_headline_only() -> None:
     )
     assert empty is not None
     assert "no stored headline" in empty.lower()
+
+
+def test_news_answer_keeps_named_holding_day_move() -> None:
+    evidence = _evidence([("VOO", "0.4", "100")])
+    evidence["metrics"].append(
+        {
+            "name": "day_change:VOO",
+            "value": "-0.012",
+            "id": "e60",
+            "source": "provider",
+        }
+    )
+    evidence["facts"].append(
+        {
+            "name": "news:VOO",
+            "value": "VOO Is Down 6% From Its High — Focus on the yearly gain.",
+            "id": "e61",
+            "source": "provider",
+        }
+    )
+    text = direct_answer(
+        "how is VOO doing currently is there any news related",
+        evidence,
+    )
+    assert text is not None
+    assert "VOO day change is -0.012" in text
+    assert "(names a difficult event)" in text
+    assert "yearly gain" in text
 
 
 def test_news_without_a_bad_event_is_grouped_by_holding() -> None:
@@ -286,13 +335,21 @@ def test_news_without_a_bad_event_is_grouped_by_holding() -> None:
     cleaned = finalize_interpretation(
         "None of the stored headlines name a loss, a lawsuit, "
         "a downgrade, or another bad event. "
-        "Should You [e41]. These headlines do not name a loss.",
+        "Billionaire Ken Fisher and Jim Cramer Still Like Apple [e41]. "
+        "These headlines do not name a loss.",
         evidence,
     )
     assert cleaned.count("Billionaire Ken Fisher") == 1
     assert cleaned.count("None of the stored headlines") == 1
     assert cleaned.count("[e41]") == 1
     assert "do not name a loss" in cleaned
+    briefed = finalize_interpretation(
+        f"{text}\n\n"
+        "Apple coverage [e41] stays upbeat without naming a lawsuit or loss.",
+        evidence,
+    )
+    assert "stays upbeat" in briefed
+    assert briefed.count("[e41]") >= 1
 
 
 def test_will_it_go_down_today_is_not_a_day_move_recap() -> None:

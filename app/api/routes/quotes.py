@@ -26,7 +26,11 @@ def list_quotes(
         raise AppError(str(exc), status_code=422) from exc
     symbols = parsed or None
     quotes = list(store.snapshot(symbols))
-    if settings.provider_marks and parsed:
+    if (
+        settings.provider_marks
+        and settings.quote_provider.strip().lower() == "yahoo"
+        and parsed
+    ):
         fetched = provider_quotes(parsed, store)
         by_ticker = {quote.ticker: quote for quote in quotes}
         by_ticker.update(fetched)

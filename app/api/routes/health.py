@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, Field
 from redis import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.api.dependencies import get_db, get_quote_store
 from app.core.cache import CacheBackend, get_cache
 from app.core.config import settings
 from app.core.metrics import OperationalMetrics, get_metrics
+from app.db.models import Security, UniverseMembership
 from app.quotes.store import QuoteStore
 from app.repositories.job_run_repository import (
     JOB_NAME_MARKET_DATA,
@@ -37,6 +38,7 @@ class StatusResponse(BaseModel):
     cache: dict[str, int | float]
     worker: dict[str, Any] | None
     metrics: dict[str, float]
+    catalog: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -106,6 +108,17 @@ def get_status(
             "upserted": run.upserted,
             "failed_ticker_count": len(run.failed_tickers),
         }
+    securities_active = db.scalar(
+        select(func.count()).select_from(Security).where(Security.is_active.is_(True))
+    )
+    universe_active = db.scalar(
+        select(func.count())
+        .select_from(UniverseMembership)
+        .where(
+            UniverseMembership.universe_code == settings.universe_code,
+            UniverseMembership.active.is_(True),
+        )
+    )
     return StatusResponse(
         status="ok",
         provider={
@@ -119,4 +132,9 @@ def get_status(
         cache=cache.stats(),
         worker=quotes.get_worker_heartbeat(),
         metrics=metrics.snapshot(),
+        catalog={
+            "securities_active": int(securities_active or 0),
+            "universe_code": settings.universe_code,
+            "universe_active": int(universe_active or 0),
+        },
     )

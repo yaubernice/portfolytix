@@ -1,0 +1,52 @@
+# SnapDeploy sleeps the API container, so its in-process cron does not run
+# while the site is idle. This workflow is the universe schedule.
+#
+# It stays manual. A cron is not enabled here because a full S&P 500 pass
+# is about one vendor request per symbol, and that volume should be
+# reviewed before it runs on a timer. After review, a weekday schedule is:
+#
+#   schedule:
+#     - cron: "30 22 * * 1-5"
+#
+# Put DATABASE_URL in a GitHub Actions secret. Do not print it. The job
+# does not create users, portfolios, or transactions.
+
+name: Market data
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Symbols this run. Keep this small until a full backfill is reviewed.
+        default: "5"
+        required: true
+      lookback_days:
+        description: Recent calendar days of daily bars.
+        default: "7"
+        required: true
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      MARKET_DATA_PROVIDER: yahoo
+      MARKET_DATA_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
+      MARKET_DATA_PAUSE_SECONDS: "1"
+      MARKET_DATA_MAX_ATTEMPTS: "3"
+      MARKET_DATA_RETRY_BACKOFF_SECONDS: "2"
+      SCHEDULER_ENABLED: "false"
+      CACHE_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the API
+        run: pip install .
+      - name: Refresh universe metadata
+        run: python scripts/ingest_market_data.py --refresh-universe
+      - name: Refresh recent daily bars
+        env:
+          INGEST_LIMIT: ${{ inputs.limit }}
+        run: python scripts/ingest_market_data.py --universe sp500 --limit "$INGEST_LIMIT"

@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -66,6 +77,14 @@ class WatchlistItem(Base):
             name="uq_watchlist_items_watchlist_security",
         ),
         Index("ix_watchlist_items_watchlist_id", "watchlist_id"),
+        CheckConstraint(
+            "alert_when IS NULL OR alert_when IN ('above', 'below')",
+            name="ck_watchlist_items_alert_when",
+        ),
+        CheckConstraint(
+            "target_price IS NULL OR target_price > 0",
+            name="ck_watchlist_items_target_price",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -83,6 +102,8 @@ class WatchlistItem(Base):
         ForeignKey("securities.id", ondelete="CASCADE"),
         nullable=False,
     )
+    target_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    alert_when: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

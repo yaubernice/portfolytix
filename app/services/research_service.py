@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal, cast
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -31,6 +32,10 @@ logger = logging.getLogger(__name__)
 _DISCLAIMER = (
     "Suggestions compare this portfolio with stored figures for companies "
     "of different sizes. They are not investment advice and do not predict prices."
+)
+_MARKET_DISCLAIMER = (
+    "Suggestions compare real stored company figures across sizes and sectors. "
+    "They are research leads, not investment advice, and do not predict prices."
 )
 _LIVE_DISCLAIMER = (
     "Each price is Yahoo's latest published quote. Company size and "
@@ -57,8 +62,15 @@ class ResearchService:
         self.user_id = user_id
         self.positions = positions
 
-    def recommendations(self, portfolio_id: UUID) -> RecommendationResponse:
-        rows = self.positions.list_positions(portfolio_id).positions
+    def recommendations(
+        self,
+        portfolio_id: UUID | None = None,
+    ) -> RecommendationResponse:
+        rows = (
+            self.positions.list_positions(portfolio_id).positions
+            if portfolio_id is not None
+            else []
+        )
         held = {row.security_id for row in rows if row.quantity > 0}
         self._fill_missing_snapshots(held)
         sector_by_id = self._sectors_for(held)
@@ -72,6 +84,10 @@ class ResearchService:
             .where(
                 Security.is_active.is_(True),
                 ~Security.ticker.like("BENCH%"),
+                or_(
+                    Fundamental.provider.is_(None),
+                    Fundamental.provider != "seed",
+                ),
             )
             .order_by(Security.ticker)
         )
@@ -103,12 +119,14 @@ class ResearchService:
                 points=points,
             )
             missing = 0 if security.sector not in held_sectors else 1
+            crowded = 1 if weight >= Decimal("0.25") else 0
             bands[_band(market_cap)].append(
                 (
-                    (missing, security.ticker),
+                    (crowded, missing, security.ticker),
                     item,
                     weight,
                     security.sector in held_sectors,
+                    _band(market_cap),
                 )
             )
         for band in bands.values():
@@ -119,11 +137,12 @@ class ResearchService:
                 if bands[name] and len(picked) < _LIMIT:
                     picked.append(bands[name].pop(0))
         items = [row[1] for row in picked]
-        disclaimer = _DISCLAIMER
+        disclaimer = _DISCLAIMER if portfolio_id is not None else _MARKET_DISCLAIMER
         if settings.ideas_live_quotes and items:
             items, used_live = _apply_latest_quotes(picked, has_holdings)
             if used_live:
                 disclaimer = _LIVE_DISCLAIMER
+        items = _with_rank(items, picked)
         return RecommendationResponse(
             portfolio_id=portfolio_id,
             disclaimer=disclaimer,
@@ -370,7 +389,7 @@ def _apply_latest_quotes(
         return [row[1] for row in picked], False
     items: list[Recommendation] = []
     used = False
-    for _key, item, weight, sector_is_held in picked:
+    for _key, item, weight, sector_is_held, *_rest in picked:
         quote = quotes.get(item.ticker)
         if not quote:
             items.append(item)
@@ -419,6 +438,11 @@ def _points(
         opening = "This portfolio has no open positions yet."
     elif not sector_is_held or weight == 0:
         opening = f"No open position is in {label}."
+    elif weight >= Decimal("0.25"):
+        opening = (
+            f"{label} is already {_percent(weight)} of this portfolio, "
+            "so another name here adds to that concentration."
+        )
     else:
         opening = f"{label} is already {_percent(weight)} of this portfolio."
     points = [opening]
@@ -432,8 +456,63 @@ def _points(
             f"It earned {_percent(roe)} on shareholder money, "
             f"and the price is {_number(pe_ratio)} times earnings."
         )
-    points.append("A reason to look, not a promise the price will rise.")
+    if has_holdings and sector_is_held and weight >= Decimal("0.25"):
+        points.append(
+            "Shown because stored company figures exist, "
+            "not because the portfolio needs more of this sector."
+        )
+    else:
+        points.append("A reason to look, not a promise the price will rise.")
     return points
+
+
+_NAME = re.compile(r"\b[A-Z]{2,5}(?:\.[A-Z])?\b")
+_COMMON_NAMES = {
+    "AI",
+    "CEO",
+    "CFO",
+    "EPS",
+    "ETF",
+    "EU",
+    "GDP",
+    "IPO",
+    "IT",
+    "NYSE",
+    "PE",
+    "ROE",
+    "SEC",
+    "UK",
+    "US",
+    "USD",
+}
+
+
+def commentary_names_only(text: str, allowed: set[str]) -> bool:
+    """True when every ticker-like token is one of the supplied companies."""
+    permitted = {ticker.upper() for ticker in allowed}
+    for token in _NAME.findall(text):
+        if token in _COMMON_NAMES or token in permitted:
+            continue
+        return False
+    return True
+
+
+def _with_rank(items: list[Recommendation], picked: list) -> list[Recommendation]:
+    ranked: list[Recommendation] = []
+    for index, item in enumerate(items):
+        band = picked[index][4] if len(picked[index]) > 4 else "small"
+        ranked.append(item.model_copy(update={"rank_note": _rank_note(index, band)}))
+    return ranked
+
+
+def _rank_note(index: int, band: str) -> str:
+    return (
+        f"Idea {index + 1}. The list alternates small, mid, and large companies, "
+        f"and this name is in the {band} group. "
+        "A sector that is already at least a quarter of the portfolio sorts later. "
+        "A sector with no holding sorts earlier. Ticker breaks the tie. "
+        "Size is a label, not a score, so a smaller company can appear first."
+    )
 
 
 def _band(market_cap: Decimal | None) -> str:

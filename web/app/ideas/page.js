@@ -4,12 +4,15 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import LearnTerm from "../../components/LearnTerm";
 import Nav from "../../components/Nav";
+import { useDisplayCurrency } from "../../components/DisplayCurrency";
 import { usePortfolio } from "../../components/usePortfolio";
-import { EmptyState, ErrorState, money, number, percent, Skeleton, TickerIdentity } from "../../components/UI";
+import { AnswerText } from "../../components/EvidenceList";
+import { EmptyState, ErrorState, number, percent, Skeleton, TickerIdentity } from "../../components/UI";
 import { api } from "../../lib/api";
 
 export default function IdeasPage() {
-  const { portfolios, portfolioId, ready, error: portfolioError } = usePortfolio();
+  const { portfolioId, ready, error: portfolioError } = usePortfolio();
+  const { money } = useDisplayCurrency();
   const [recommendations, setRecommendations] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -18,14 +21,13 @@ export default function IdeasPage() {
 
   useEffect(() => {
     if (!ready) return undefined;
-    if (!portfolioId) {
-      setLoading(false);
-      return undefined;
-    }
     let cancelled = false;
     setLoading(true);
     setError("");
-    api(`/portfolios/${portfolioId}/recommendations`)
+    const path = portfolioId
+      ? `/portfolios/${portfolioId}/recommendations`
+      : "/recommendations";
+    api(path)
       .then((ideas) => {
         if (!cancelled) setRecommendations(ideas);
       })
@@ -46,14 +48,13 @@ export default function IdeasPage() {
       <main id="main-content" className="content">
         <header className="page-header">
           <div>
-            <p className="eyebrow">Research</p>
+            <p className="eyebrow">Discover</p>
             <h1>Companies to look at</h1>
-            <p className="muted">A reason to look, not a recommendation to buy.</p>
+            <p className="muted">Ranked from stored company figures — a reason to research, not a buy tip.</p>
           </div>
         </header>
         <ErrorState message={error || portfolioError} />
         {loading ? <Skeleton lines={6} label="Loading suggestions" /> : null}
-        {!loading && ready && portfolios.length === 0 ? <EmptyState title="No portfolio yet">Create a portfolio before asking for ideas.</EmptyState> : null}
         {!loading && recommendations ? (
           <section aria-labelledby="ideas-title">
             <div className="block-head">
@@ -74,7 +75,12 @@ export default function IdeasPage() {
               </div>
             </div>
             <p className="compact-note">{recommendations.disclaimer}</p>
-            {recommendations.commentary ? <p className="compact-note">{recommendations.commentary_source === "llm" ? "Written by the configured model. " : "Restated from the stored figures. "}{recommendations.commentary}</p> : null}
+            {recommendations.commentary ? (
+              <div className="idea-commentary">
+                <p className="compact-note">{recommendations.commentary_source === "llm" ? "Written by the configured model from the stored company points." : "Restated from the stored figures."}</p>
+                <AnswerText text={recommendations.commentary} />
+              </div>
+            ) : null}
             {recommendations.items.length === 0 ? <EmptyState title="No other companies yet">Stored figures are needed before a company can be suggested.</EmptyState> : (
               <ol className="idea-list">
                 {recommendations.items
@@ -109,6 +115,7 @@ export default function IdeasPage() {
                       <div><dt><LearnTerm slug="roe">ROE</LearnTerm></dt><dd>{percent(row.roe)}</dd></div>
                       <div><dt><LearnTerm slug="pe-ratio">P/E</LearnTerm></dt><dd>{number(row.pe_ratio, { maximumFractionDigits: 2 })}</dd></div>
                     </dl>
+                    {row.rank_note ? <p className="compact-note">{row.rank_note}</p> : null}
                     <details className="idea-why">
                       <summary>Why look at it</summary>
                       {row.points?.length ? (

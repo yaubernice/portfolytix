@@ -4,6 +4,7 @@
 .env.*.local
 .env.deploy
 .env.production
+# `.env.production.example` is placeholders only and stays in git.
 *.pem
 
 # Python
@@ -25,6 +26,7 @@ htmlcov/
 # Next.js demo
 web/node_modules/
 web/.next/
+web/.next-build/
 
 # Editors / OS
 .idea/

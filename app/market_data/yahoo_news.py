@@ -74,17 +74,20 @@ class YahooNewsSource:
     capabilities = YAHOO_NEWS
 
     def __init__(self, client: httpx.Client | None = None) -> None:
-        self._client = client or httpx.Client(timeout=20.0)
+        self._client = client or httpx.Client(timeout=20.0, trust_env=False)
 
     def fetch_news(self, ticker: str) -> list[dict]:
         symbol = ticker.strip().upper()
         if not symbol:
             raise ProviderError("Yahoo news ticker is empty", retryable=False)
-        response = self._client.get(
-            YAHOO_SEARCH,
-            params={"q": symbol, "quotesCount": 0, "newsCount": 12},
-            headers={"User-Agent": "Portfolytix/1.0"},
-        )
+        try:
+            response = self._client.get(
+                YAHOO_SEARCH,
+                params={"q": symbol, "quotesCount": 0, "newsCount": 12},
+                headers={"User-Agent": "Portfolytix/1.0"},
+            )
+        except httpx.HTTPError as exc:
+            raise ProviderError("Yahoo news request failed") from exc
         try:
             response.raise_for_status()
             payload = response.json()

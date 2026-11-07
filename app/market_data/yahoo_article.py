@@ -33,7 +33,11 @@ def fetch_article_text(url: str, client: httpx.Client | None = None) -> str:
             retryable=False,
         )
     owns_client = client is None
-    http = client or httpx.Client(timeout=20.0, follow_redirects=True)
+    http = client or httpx.Client(
+        timeout=20.0,
+        follow_redirects=True,
+        trust_env=False,
+    )
     try:
         response = http.get(url, headers={"User-Agent": "Portfolytix/1.0"})
         response.raise_for_status()

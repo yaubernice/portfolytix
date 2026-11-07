@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_quote_store
+from app.core.config import settings
 from app.db.models import Price, Security, User
 from app.main import app
 from app.quotes.models import quote_from_parts
@@ -35,6 +36,30 @@ def test_quote_snapshot_comes_from_the_store(client: TestClient) -> None:
     assert body["quotes"][0]["ticker"] == "AAPL"
     assert body["quotes"][0]["price"] == "190"
     assert Decimal(body["quotes"][0]["change"]) == Decimal("5")
+
+
+def test_finnhub_store_is_not_overwritten_by_yahoo_marks(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    store = MemoryQuoteStore()
+    store.publish(
+        quote_from_parts(
+            ticker="AAPL",
+            price=Decimal("191"),
+            timestamp=datetime.now(UTC),
+            source="finnhub",
+            timeliness="realtime",
+        )
+    )
+    app.dependency_overrides[get_quote_store] = lambda: store
+    monkeypatch.setattr(settings, "provider_marks", True)
+    monkeypatch.setattr(settings, "quote_provider", "finnhub")
+
+    response = client.get("/quotes", params={"tickers": "AAPL"})
+
+    assert response.status_code == 200
+    assert response.json()["quotes"][0]["source"] == "finnhub"
 
 
 def test_quote_snapshot_filters_multiple_symbols_and_rejects_invalid_input(

@@ -31,13 +31,29 @@ function safeUrl(value) {
   }
 }
 
+function cleanTicker(ticker) {
+  const value = String(ticker || "").toUpperCase();
+  return /^[A-Z][A-Z0-9.-]{0,9}$/.test(value) ? value : "";
+}
+
 export function namedInHeadline(item) {
   const headline = ` ${String(item.headline || "").toUpperCase()} `;
-  return [...new Set((item.tickers || []).map((ticker) => String(ticker).toUpperCase()).filter((ticker) => {
-    if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(ticker)) return false;
+  return [...new Set((item.tickers || []).map(cleanTicker).filter((ticker) => {
+    if (!ticker) return false;
     const pattern = new RegExp(`(^|[^A-Z0-9])${ticker.replaceAll(".", "\\.")}([^A-Z0-9]|$)`);
     return pattern.test(headline);
   }))];
+}
+
+/** Companies this story is about: headline names first, then provider-related tickers. */
+export function storyCompanies(item, limit = 6) {
+  const named = namedInHeadline(item);
+  const related = [...new Set((item.tickers || []).map(cleanTicker).filter(Boolean))];
+  const ordered = [...named];
+  for (const ticker of related) {
+    if (!ordered.includes(ticker)) ordered.push(ticker);
+  }
+  return ordered.slice(0, limit);
 }
 
 export function storyScope(item, held, watched) {
@@ -68,19 +84,19 @@ function relevance(item, held, watched) {
   return "";
 }
 
-function TickerMarks({ tickers }) {
+function CompanyMarks({ tickers, size = 22 }) {
   if (!tickers?.length) return null;
-  const shown = tickers.slice(0, 4);
+  const shown = tickers.slice(0, 6);
   const extra = tickers.length - shown.length;
   return (
-    <span className="news-tickers">
+    <span className="news-tickers" aria-label={`About ${shown.join(", ")}`}>
       {shown.map((ticker) => (
-        <span className="news-ticker" key={ticker}>
-          <CompanyLogo ticker={ticker} size={18} />
-          {ticker}
+        <span className="news-ticker" key={ticker} title={ticker}>
+          <CompanyLogo ticker={ticker} size={size} />
+          <span className="news-ticker-code">{ticker}</span>
         </span>
       ))}
-      {extra > 0 ? <span className="muted">+{extra}</span> : null}
+      {extra > 0 ? <span className="muted news-ticker-extra">+{extra}</span> : null}
     </span>
   );
 }
@@ -139,21 +155,26 @@ export default function NewsList({ items, provider, held = [], watched = [] }) {
   return (
     <>
       <ol className="news-feed">
-        {items.map((item) => (
-          <li key={`${item.url}-${item.headline}`}>
-            <button type="button" className="news-story" onClick={() => setOpen(item)}>
-              <StoryImage src={item.image_url} />
-              <span className="news-copy">
-                <span className="news-meta">{item.source} · {publishedLabel(item.published_at)}</span>
-                <h3>{item.headline}</h3>
-                {item.brief ? <span className="news-brief-line">{briefLabel(item)}{item.brief}</span> : null}
-                <span className="news-relevance">{relevance(item, held, watched)}</span>
-                <TickerMarks tickers={namedInHeadline(item)} />
-                <span className="muted news-note">{item.provider || provider || "Provider unavailable"} · Open for a generated summary</span>
-              </span>
-            </button>
-          </li>
-        ))}
+        {items.map((item) => {
+          const companies = storyCompanies(item);
+          return (
+            <li key={`${item.url}-${item.headline}`}>
+              <button type="button" className="news-story" onClick={() => setOpen(item)}>
+                <StoryImage src={item.image_url} />
+                <span className="news-copy">
+                  <span className="news-story-top">
+                    <CompanyMarks tickers={companies} />
+                    <span className="news-meta">{item.source} · {publishedLabel(item.published_at)}</span>
+                  </span>
+                  <h3>{item.headline}</h3>
+                  {item.brief && !/^No summary is stored/i.test(item.brief) ? <span className="news-brief-line">{briefLabel(item)}{item.brief}</span> : null}
+                  <span className="news-relevance">{relevance(item, held, watched)}</span>
+                  <span className="muted news-note">{item.provider || provider || "Provider unavailable"} · Open for a generated summary</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
       </ol>
       {open ? (
         <div className="explain-backdrop" onClick={() => setOpen(null)}>
@@ -167,14 +188,18 @@ export default function NewsList({ items, provider, held = [], watched = [] }) {
             <div className="explain-head">
               <div>
                 <p className="eyebrow">{open.source || "Story"} · {publishedLabel(open.published_at)}</p>
+                <CompanyMarks tickers={storyCompanies(open)} size={24} />
                 <h2 id="news-read-title">{open.headline}</h2>
               </div>
               <button type="button" onClick={() => setOpen(null)}>Close</button>
             </div>
             <p className="news-relevance">{relevance(open, held, watched)}</p>
             <p className="news-links">
-              {namedInHeadline(open).slice(0, 4).map((ticker) => (
-                <Link key={ticker} href={`/securities/${ticker}`}>{ticker} research</Link>
+              {storyCompanies(open, 4).map((ticker) => (
+                <Link key={ticker} href={`/securities/${ticker}`} className="news-research-link">
+                  <CompanyLogo ticker={ticker} size={18} />
+                  {ticker} research
+                </Link>
               ))}
               {original ? <a href={original} target="_blank" rel="noreferrer">Original article</a> : <span className="muted">No original link was provided.</span>}
             </p>

@@ -90,6 +90,30 @@ def test_recommendations_prefer_a_sector_the_portfolio_does_not_hold(
     assert hidden.status_code == 404
 
 
+def test_market_recommendations_do_not_require_a_portfolio(
+    client: TestClient,
+    sqlite_session: Session,
+    apple: Security,
+) -> None:
+    microsoft = _security(sqlite_session, "MSFT", "Technology")
+    google = _security(sqlite_session, "GOOGL", "Communication Services")
+    session_cap(sqlite_session, apple, "0.20", "1000000000")
+    session_cap(sqlite_session, microsoft, "0.30", "5000000000")
+    session_cap(sqlite_session, google, "0.25", "100000000000")
+    sqlite_session.commit()
+
+    response = client.get("/recommendations")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["portfolio_id"] is None
+    assert {row["ticker"] for row in body["items"]} == {
+        "AAPL",
+        "GOOGL",
+        "MSFT",
+    }
+    assert "real stored company figures" in body["disclaimer"]
+
+
 def test_recommendations_keep_a_smaller_company_beside_a_giant(
     client: TestClient,
     sqlite_session: Session,

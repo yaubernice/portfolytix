@@ -5,6 +5,7 @@
 #Log requests
 
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -79,7 +80,9 @@ async def log_requests(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
+    started = time.monotonic()
     response = await call_next(request)
+    elapsed_ms = round((time.monotonic() - started) * 1000, 1)
     # Commit before the body is sent. Code after a dependency yield runs too late
     # for a client that immediately reads the row it just created.
     db = getattr(request.state, "db", None)
@@ -92,6 +95,16 @@ async def log_requests(
             "method": request.method,
             "path": request.url.path,
             "status_code": response.status_code,
+            "duration_ms": elapsed_ms,
         },
     )
+    if elapsed_ms >= 1000:
+        logger.info(
+            "slow request",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "duration_ms": elapsed_ms,
+            },
+        )
     return response

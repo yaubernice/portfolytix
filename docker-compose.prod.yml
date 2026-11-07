@@ -1,0 +1,179 @@
+# VPS only: PostgreSQL, Redis, migrations, the API, and the quote worker.
+# The Next.js app is deployed separately. Do not add it to this file.
+# Copy `.env.production.example` to `.env.production` and pass that file
+# with `--env-file`. This file has no development password or JWT default.
+
+name: portfolytix
+
+x-database-url: &database-url postgresql+psycopg://finsight:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a unique password}@db:5432/finsight
+
+x-production-env: &production-env
+  APP_NAME: Portfolytix
+  ENVIRONMENT: production
+  LOG_LEVEL: INFO
+  DATABASE_URL: *database-url
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY to a random secret of at least 32 characters}
+  JWT_ALGORITHM: HS256
+  JWT_ISSUER: finsight
+  JWT_ACCESS_TOKEN_MINUTES: "30"
+  CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to the https origin of the Vercel site}
+  AI_PROVIDER: ${AI_PROVIDER:-openai}
+  AI_OPENAI_API: ${AI_OPENAI_API:-chat}
+  AI_BASE_URL: ${AI_BASE_URL:-https://openrouter.ai/api/v1}
+  AI_MODEL: ${AI_MODEL:-openrouter/free}
+  AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-20}
+  AI_FALLBACK_TO_LOCAL: ${AI_FALLBACK_TO_LOCAL:-false}
+  AI_API_KEY: ${AI_API_KEY:-}
+  WEB_RESEARCH_PROVIDER: ${WEB_RESEARCH_PROVIDER:-tavily}
+  WEB_RESEARCH_API_KEY: ${WEB_RESEARCH_API_KEY:-}
+  WEB_RESEARCH_MAX_RESULTS: ${WEB_RESEARCH_MAX_RESULTS:-5}
+  WEB_RESEARCH_TIMEOUT_SECONDS: ${WEB_RESEARCH_TIMEOUT_SECONDS:-15}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: finsight
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a unique password}
+      POSTGRES_DB: finsight
+    volumes:
+      - finsight_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finsight -d finsight"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *production-env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      <<: *production-env
+      RISK_FREE_RATE: "0.05"
+      TRADING_DAYS_PER_YEAR: "252"
+      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-yahoo}
+      MARKET_DATA_API_KEY: ${MARKET_DATA_API_KEY:-}
+      SCHEDULER_ENABLED: "true"
+      MARKET_DATA_CRON: "0 22 * * *"
+      MARKET_DATA_LOOKBACK_DAYS: "7"
+      MARKET_DATA_MAX_SECURITIES: "25"
+      MARKET_DATA_MAX_WINDOW_DAYS: "1825"
+      MARKET_DATA_MAX_ATTEMPTS: "3"
+      MARKET_DATA_RETRY_BACKOFF_SECONDS: "0"
+      MARKET_DATA_PAUSE_SECONDS: "0"
+      MARKET_DATA_ALLOW_FULL_HISTORY: "false"
+      JOB_STALE_AFTER_SECONDS: "3600"
+      CACHE_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CACHE_KEY_PREFIX: finsight
+      ANALYTICS_CACHE_TTL_SECONDS: "300"
+      SCREENING_CACHE_TTL_SECONDS: "300"
+      REDIS_SOCKET_TIMEOUT_SECONDS: "0.2"
+      QUOTE_PROVIDER: ${QUOTE_PROVIDER:-finnhub}
+      PROVIDER_MARKS: ${PROVIDER_MARKS:-false}
+      QUOTE_SYMBOLS: AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA
+      QUOTE_POLL_SECONDS: "2"
+      QUOTE_TTL_SECONDS: "30"
+      QUOTE_STALE_AFTER_SECONDS: "15"
+      QUOTE_DELAYED_STALE_AFTER_SECONDS: "120"
+      HISTORY_STALE_AFTER_BUSINESS_DAYS: "3"
+      QUOTE_WORKER_HEARTBEAT_TTL_SECONDS: "30"
+      QUOTE_MAX_SYMBOLS: "50"
+      QUOTE_RECONNECT_SECONDS: "2"
+      QUOTE_SYMBOL_REFRESH_SECONDS: "30"
+      ALPHA_VANTAGE_REALTIME: "false"
+      NEWS_PROVIDER: ${NEWS_PROVIDER:-finnhub}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      NEWS_TTL_SECONDS: "900"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 8s
+
+  quotes:
+    build: .
+    command: ["python", "-m", "app.workers.quote_worker"]
+    environment:
+      <<: *production-env
+      CACHE_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CACHE_KEY_PREFIX: finsight
+      REDIS_SOCKET_TIMEOUT_SECONDS: "0.2"
+      QUOTE_PROVIDER: ${QUOTE_PROVIDER:-finnhub}
+      PROVIDER_MARKS: ${PROVIDER_MARKS:-false}
+      QUOTE_SYMBOLS: AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA
+      QUOTE_POLL_SECONDS: "2"
+      QUOTE_TTL_SECONDS: "30"
+      QUOTE_STALE_AFTER_SECONDS: "15"
+      QUOTE_DELAYED_STALE_AFTER_SECONDS: "120"
+      QUOTE_WORKER_HEARTBEAT_TTL_SECONDS: "30"
+      QUOTE_MAX_SYMBOLS: "50"
+      QUOTE_RECONNECT_SECONDS: "2"
+      QUOTE_SYMBOL_REFRESH_SECONDS: "30"
+      ALPHA_VANTAGE_REALTIME: "false"
+      NEWS_PROVIDER: ${NEWS_PROVIDER:-finnhub}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      MARKET_DATA_API_KEY: ${MARKET_DATA_API_KEY:-}
+      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-yahoo}
+      NEWS_TTL_SECONDS: "900"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from app.workers.quote_worker import build_worker_store; assert build_worker_store().get_worker_heartbeat()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  finsight_pg:

@@ -206,4 +206,22 @@ def test_ticker_failure_marks_job_failed(sqlite_session: Session) -> None:
     )
     assert run.status == JobStatus.FAILED
     assert run.failed_tickers == ["AAPL"]
+    assert run.error == "ticker_failures:AAPL=vendor down"
     assert sqlite_session.scalars(select(Price)).all() == []
+
+
+def test_empty_book_is_skipped_without_a_download(
+    sqlite_session: Session,
+) -> None:
+    provider = FakeProvider({"AAPL": [_bar("AAPL", date(2024, 1, 2), "100")]})
+    run = update_market_data(
+        sqlite_session,
+        tickers=[],
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 2),
+        provider=provider,
+        trigger="scheduler",
+    )
+    assert run.status == JobStatus.SKIPPED
+    assert run.error == "no_holdings_or_watchlists"
+    assert provider.calls == []

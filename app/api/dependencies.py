@@ -13,11 +13,18 @@ from app.core.security import decode_access_token
 from app.db.models import User
 from app.db.session import SessionLocal
 from app.quotes.store import QuoteStore, build_quote_store
+from app.research.factory import (
+    build_optional_web_research_provider,
+    build_web_research_provider,
+)
+from app.research.provider import WebResearchProvider
 from app.services.analytics_service import AnalyticsService
 from app.services.assistant_service import AssistantService
 from app.services.auth_service import AuthService
 from app.services.job_service import JobService
 from app.services.learning_service import LearningService
+from app.services.ledger_service import LedgerService
+from app.services.market_research_service import MarketResearchService
 from app.services.portfolio_service import PortfolioService
 from app.services.position_service import PositionService
 from app.services.reference_service import ReferenceService
@@ -77,6 +84,13 @@ def get_portfolio_service(
     return PortfolioService(db, current_user.id)
 
 
+def get_ledger_service(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> LedgerService:
+    return LedgerService(db, current_user.id)
+
+
 def get_analytics_service( 
     db: Session = Depends(get_db),
     cache: CacheBackend = Depends(get_cache),
@@ -99,6 +113,21 @@ def get_screening_service(
 def get_assistant_model() -> AssistantModel:
     # Built without a session. Portfolio reads stay in AnalyticsService.
     return build_assistant_model()
+
+
+def get_web_research_provider() -> WebResearchProvider:
+    return build_web_research_provider()
+
+
+def get_optional_web_research_provider() -> WebResearchProvider | None:
+    return build_optional_web_research_provider()
+
+
+def get_market_research_service(
+    model: AssistantModel = Depends(get_assistant_model),
+    provider: WebResearchProvider = Depends(get_web_research_provider),
+) -> MarketResearchService:
+    return MarketResearchService(model, provider)
 
 
 def get_quote_store() -> QuoteStore:
@@ -143,8 +172,11 @@ def get_assistant_service(
     analytics: AnalyticsService = Depends(get_analytics_service),
     model: AssistantModel = Depends(get_assistant_model),
     quotes: QuoteStore = Depends(get_quote_store),
+    web_research: WebResearchProvider | None = Depends(
+        get_optional_web_research_provider
+    ),
 ) -> AssistantService:
-    return AssistantService(analytics, model, quotes)
+    return AssistantService(analytics, model, quotes, web_research)
 
 
 def get_safe_tool_executor(

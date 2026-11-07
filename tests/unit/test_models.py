@@ -19,10 +19,18 @@ def test_expected_tables_exist() -> None:
         "transactions",
         "job_runs",
         "fundamentals",
-            "watchlists",
-            "watchlist_items",
-            "research_flags",
-        }
+        "watchlists",
+        "watchlist_items",
+        "research_flags",
+        "universe_memberships",
+        "cash_movements",
+        "share_splits",
+        "goals",
+        "journal_entries",
+        "etf_holdings",
+        "share_links",
+        "audit_events",
+    }
 
 
 def test_price_and_quantity_columns_are_numeric_not_float() -> None:
@@ -45,6 +53,7 @@ def test_price_and_quantity_columns_are_numeric_not_float() -> None:
         "revenue",
         "profit_margin",
         "dividend_yield",
+        "expense_ratio",
         "beta",
         "ebitda",
         "shares_outstanding",

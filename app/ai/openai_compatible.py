@@ -65,8 +65,12 @@ _EXPLAIN_INSTRUCTION = (
 _STORY_INSTRUCTION = (
     'Return one JSON object {"about": string, "points": [strings]}. '
     "The reader is new to finance and opened one story. "
-    "about: two short sentences saying what the story is about. "
-    "points: up to three short facts from the article, one sentence each. "
+    "about: two complete sentences saying what the story is about, "
+    "including the main subject and why it matters in the article. "
+    "points: up to three facts from the article, one complete sentence each. "
+    "Each point should keep the key detail from the article "
+    "(cause, comparison, figure, or outcome when stated there). "
+    "Finish every sentence; do not cut a thought short. "
     "Use only the article text. "
     "Do not add numbers, prices, or events that are not written there. "
     "Do not say whether to buy or sell. Do not predict."
@@ -93,16 +97,24 @@ _IDEA_INSTRUCTION = (
     'Return one JSON object {"commentary": string}. '
     "One or two short sentences about these stored companies. "
     "Use only the points given. "
+    "Name a company only when its ticker is in the companies list. "
+    "Do not mention any other holding, ticker, or company. "
+    "If a point says a sector is already a large share, "
+    "do not treat that as a reason to own more of it. "
     "Do not add a number, a price, a forecast, or a buy or sell instruction."
 )
 _INTERPRET_INSTRUCTION = (
     'Return one JSON object {"interpretation": string}. '
     "Answer the question in the first sentence, for a reader who is new "
-    "to finance. Use short sentences. "
+    "to finance. After that first sentence, write at most four short "
+    "points, each on its own line starting with '- '. Use short sentences. "
+    "Never write a URL, domain, or web address. "
     "Personal portfolio numbers must come from the evidence. "
     "If direct_answer is present, start with it and do not change its numbers. "
     "Cite a supporting item as [e3] only when that id is in the evidence. "
     "Do not invent an id. "
+    "When citation_required is true, every factual claim must cite at least "
+    "one supplied evidence id. Do not use general model knowledge. "
     "A missing company figure such as ROE is not a short portfolio-return "
     "history. Do not say historical returns are required to calculate "
     "company ROE. "
@@ -113,7 +125,10 @@ _INTERPRET_INSTRUCTION = (
     "Say the as-of date when the evidence has one. "
     "Do not invent prices, holdings, dates, headlines, or results. "
     "If the question asks about news or a future period, use the stored "
-    "headlines and the current holdings. Say which holding a headline names. "
+    "headlines, summaries, and the current holdings. Say which holding a "
+    "headline names. After the direct_answer block, add two to four short "
+    "lines that brief what those stored stories say, citing each with [eN]. "
+    "Use the summary text when one is stored after an em dash. "
     "Do not invent a future return or a price target. "
     "Do not give an order to buy or sell. "
     "If direct_answer says a judgment is not in the stored evidence, "
@@ -121,7 +136,7 @@ _INTERPRET_INSTRUCTION = (
     "sell rule from anywhere else. "
     "One limitation is enough. Do not repeat a disclaimer in every sentence. "
     "If direct_answer already has line breaks, keep them. "
-    "Do not copy a headline that is already written there."
+    "Do not paste a headline verbatim; paraphrase the point and cite it."
 )
 
 
@@ -184,7 +199,7 @@ class OpenAICompatibleModel:
     def summarize_story(self, headline: str, text: str) -> dict:
         raw = self._complete(
             _STORY_INSTRUCTION,
-            json.dumps({"headline": headline, "article": text[:2400]}),
+            json.dumps({"headline": headline, "article": text[:5000]}),
             schema_name="story_summary",
             schema=story_json_schema(),
         )
@@ -277,7 +292,7 @@ class OpenAICompatibleModel:
         url = f"{self._base_url}/chat/completions"
         if self._client is not None:
             return self._client.post(url, json=payload, headers=headers)
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, trust_env=False) as client:
             return client.post(url, json=payload, headers=headers)
 
 
@@ -291,7 +306,7 @@ def _story_fields(raw: dict, article: str) -> dict:
     values = raw.get("points")
     if isinstance(values, list):
         for value in values:
-            line = _one_sentence(value) if isinstance(value, str) else ""
+            line = _story_point(value) if isinstance(value, str) else ""
             if not line or _adds_number(line, source):
                 continue
             points.append(line)
@@ -306,9 +321,23 @@ def _two_sentences(value: str) -> str:
         return ""
     parts = re.split(r"(?<=[.!?])\s+", text)
     kept = " ".join(parts[:2])
-    if len(kept) > 320:
-        kept = kept[:317].rsplit(" ", 1)[0] + "…"
+    if len(kept) > 420:
+        kept = kept[:417].rsplit(" ", 1)[0] + "…"
     return kept
+
+
+def _story_point(value: str) -> str:
+    """Keep one complete key-point sentence with room for article detail."""
+    text = " ".join(value.split())
+    if not text:
+        return ""
+    for mark in (". ", "? ", "! "):
+        if mark in text:
+            text = text.split(mark)[0] + mark.strip()
+            break
+    if len(text) > 360:
+        text = text[:357].rsplit(" ", 1)[0] + "…"
+    return text
 
 
 def _story_text(story: dict) -> dict:

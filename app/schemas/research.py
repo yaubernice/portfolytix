@@ -73,10 +73,11 @@ class Recommendation(BaseModel):
     quoted_at: datetime | None = None
     reason: str
     points: list[str] = []
+    rank_note: str = ""
 
 
 class RecommendationResponse(BaseModel):
-    portfolio_id: UUID
+    portfolio_id: UUID | None = None
     commentary: str | None = None
     commentary_source: str | None = None
     disclaimer: str

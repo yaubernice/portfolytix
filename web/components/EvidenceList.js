@@ -1,5 +1,6 @@
 "use client";
 
+import { CompanyLogo, TickerIdentity } from "./UI";
 import { roundFigures } from "../lib/figures";
 
 const SOURCE_LABEL = {
@@ -11,6 +12,8 @@ const SOURCE_LABEL = {
 
 const HIDDEN_VALUES = new Set(["undefined", "unavailable", "insufficient_history"]);
 const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
+const TICKER_LINE = /^[A-Z][A-Z0-9.]{0,9}$/;
+const ADVERSE_MARK = " (names a difficult event)";
 
 function displayValue(value) {
   const text = String(value);
@@ -19,47 +22,176 @@ function displayValue(value) {
 }
 
 export function answerOrigin(source) {
-  if (source === "llm") return "Written by the configured model";
+  if (source === "llm") return "Written by the configured model from the evidence below";
   if (source === "template") return "Restated from the evidence, without a language model";
   return "";
 }
 
-const TICKER_LINE = /^[A-Z][A-Z0-9.]{0,9}$/;
-const ADVERSE_MARK = " (names a difficult event)";
+export function collectSources(evidence) {
+  if (evidence?.sources?.length) return evidence.sources;
+  return (evidence?.facts || [])
+    .filter((row) => row.url)
+    .map((row) => ({
+      id: row.id,
+      title: row.title || row.label || row.name,
+      url: row.url,
+      publisher: row.publisher || "",
+      published_at: row.published_at || row.as_of || "",
+    }));
+}
+
+export function collectTickers(evidence) {
+  const tickers = new Set();
+  for (const row of [...(evidence?.metrics || []), ...(evidence?.facts || [])]) {
+    const fromName = String(row.name || "").match(/:([A-Z0-9.-]+)$/);
+    if (fromName) tickers.add(fromName[1]);
+    const label = String(row.label || "").trim().toUpperCase();
+    if (TICKER_LINE.test(label)) tickers.add(label);
+  }
+  return tickers;
+}
+
+function stripAddresses(text) {
+  return String(text || "")
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/\s+\(\s*\)/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ \n/g, "\n")
+    .trim();
+}
+
+function sourceIndex(id, sources) {
+  const needle = String(id || "").toLowerCase();
+  const exact = sources.findIndex((row) => String(row.id || "").toLowerCase() === needle);
+  if (exact >= 0) return exact + 1;
+  const numbered = needle.match(/^e(\d+)$/);
+  return numbered ? Number(numbered[1]) : null;
+}
+
+function InlineText({ text, sources, tickers }) {
+  const pieces = String(text || "").split(/(\[e\d+\]|https?:\/\/\S+|\b[A-Z]{2,5}(?:[.-][A-Z0-9]{1,4})?\b)/g);
+  return pieces.map((part, index) => {
+    const cite = part.match(/^\[e(\d+)\]$/i);
+    if (cite) {
+      const number = sourceIndex(`e${cite[1]}`, sources) || Number(cite[1]);
+      const source = sources[number - 1];
+      if (source?.url) {
+        return (
+          <a
+            key={`${part}-${index}`}
+            className="cite-chip"
+            href={source.url}
+            target="_blank"
+            rel="noreferrer"
+            title={`${source.title || "Source"}${source.published_at ? ` (${sourceDate(source.published_at)})` : " (date unavailable)"}`}
+          >
+            {number}
+          </a>
+        );
+      }
+      return <sup key={`${part}-${index}`} className="cite-chip">{number}</sup>;
+    }
+    if (/^https?:\/\//i.test(part)) return null;
+    if (tickers.has(part)) {
+      return (
+        <span className="answer-ticker" key={`${part}-${index}`}>
+          <CompanyLogo ticker={part} size={18} />
+          <strong>{part}</strong>
+        </span>
+      );
+    }
+    return <span key={`${part}-${index}`}>{part}</span>;
+  });
+}
+
+function sourceDate(value) {
+  if (!value) return "";
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return String(value);
+  return new Date(parsed).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+export function SourceList({ sources = [] }) {
+  if (!sources.length) return null;
+  return (
+    <section className="source-cards" aria-label="Sources used">
+      <h3>Sources used</h3>
+      <ol>
+        {sources.map((source, index) => (
+          <li key={source.id || source.url || source.title}>
+            <a href={source.url} target="_blank" rel="noreferrer">
+              <span className="source-index">{index + 1}</span>
+              <span>
+                <strong>{source.title}</strong>
+                <small>
+                  {source.publisher || "Publisher unavailable"}
+                  {` · ${sourceDate(source.published_at) || "date unavailable"}`}
+                </small>
+              </span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
 
 export function AnswerText({ text, evidence = null, question = "", streaming = false }) {
-  const shown = roundFigures(text, 4, !streaming);
+  const shown = stripAddresses(roundFigures(text, 4, !streaming));
+  const sources = collectSources(evidence);
+  const tickers = collectTickers(evidence);
   const brief = parseNewsBrief(shown);
   if (brief) {
     return <NewsBrief brief={brief} evidence={evidence} streaming={streaming} />;
   }
-  const lines = splitSentences(shown);
+  const lines = splitAnswer(shown);
   const caret = streaming ? <span className="generating-caret" aria-hidden="true" /> : null;
   return (
     <div className="answer-layout">
       <AnswerFigure evidence={evidence} question={question} text={shown} />
       {lines ? (
         <>
-          <p className="answer-lead">{lines.lead}{lines.rest.length ? null : caret}</p>
+          <p className="answer-lead">
+            <InlineText text={lines.lead} sources={sources} tickers={tickers} />
+            {lines.rest.length ? null : caret}
+          </p>
           <ul className="answer-points">
             {lines.rest.map((line, index) => (
-              <li key={line}>
-                {line}
+              <li key={`${line}-${index}`}>
+                <InlineText text={line} sources={sources} tickers={tickers} />
                 {caret && index === lines.rest.length - 1 ? caret : null}
               </li>
             ))}
           </ul>
         </>
       ) : (
-        <p className="answer-lead">{shown}{caret}</p>
+        <p className="answer-lead">
+          <InlineText text={shown} sources={sources} tickers={tickers} />
+          {caret}
+        </p>
       )}
+      <SourceList sources={sources} />
     </div>
   );
 }
 
-function splitSentences(text) {
-  const parts = text.split(/(?<=[.!?])\s+(?!\[[eE]\d+\])/).map((part) => part.trim()).filter(Boolean);
-  if (parts.length < 2) return null;
+function visibleWords(text) {
+  return stripAddresses(text).replace(/\[e\d+\]/gi, "").replace(/\s+/g, "");
+}
+
+function splitAnswer(text) {
+  const bullets = text
+    .split("\n")
+    .map((line) => line.replace(/^[-*]\s+/, "").trim())
+    .filter((line) => visibleWords(line));
+  if (bullets.length >= 2 && text.includes("\n")) {
+    return { lead: bullets[0], rest: bullets.slice(1) };
+  }
+  const parts = text
+    .split(/(?<=[.!?])\s+(?!\[[eE]\d+\])/)
+    .map((part) => part.trim())
+    .filter((part) => visibleWords(part));
+  if (parts.length < 2) return parts.length ? { lead: parts[0], rest: [] } : null;
   return { lead: parts[0], rest: parts.slice(1) };
 }
 
@@ -145,7 +277,7 @@ function HoldingBars({ evidence, kind, future }) {
         const label = formatMetric(row.value, "percent");
         return (
           <div className="bar-row" key={row.ticker}>
-            <span>{row.ticker}</span>
+            <TickerIdentity ticker={row.ticker} size={22} />
             <div className="weight-track" role="img" aria-label={`${row.ticker} ${label}`}>
               <div className={row.value < 0 ? "weight-fill negative" : "weight-fill"} style={{ width: `${width}%` }} />
             </div>
@@ -237,7 +369,7 @@ function NewsBrief({ brief, evidence, streaming }) {
           return (
             <article className="news-card" key={holding.ticker}>
               <header>
-                <h3>{holding.ticker}</h3>
+                <TickerIdentity ticker={holding.ticker} size={24} />
                 {label ? <span>{label}</span> : null}
               </header>
               {weight != null ? (
@@ -274,18 +406,26 @@ export function EvidenceList({ facts = [], metrics = [] }) {
         const exact = String(item.value);
         const missing = item.availability === "unavailable" || HIDDEN_VALUES.has(exact);
         const shown = missing ? "—" : displayValue(exact);
+        const method = stripAddresses(item.method || "");
         return (
           <details className="evidence-item" key={item.id || `${item.kind}-${item.name}`}>
             <summary>
               <span>{item.label || item.name}</span>
               <strong>{shown}{!missing && item.unit ? ` ${item.unit}` : ""}</strong>
             </summary>
-            {!missing && shown !== exact ? <p>Exact value {exact}{item.unit ? ` ${item.unit}` : ""}</p> : null}
-            {item.method ? <p>{item.method}</p> : null}
+            {!missing && shown !== exact && !/^https?:\/\//i.test(exact) ? <p>Exact value {exact}{item.unit ? ` ${item.unit}` : ""}</p> : null}
+            {method ? <p>{method}</p> : null}
             {item.as_of ? <p>As of {item.as_of}</p> : null}
+            {item.url ? (
+              <p>
+                <a href={item.url} target="_blank" rel="noreferrer">
+                  Open {item.publisher || item.title || "source"}
+                </a>
+              </p>
+            ) : null}
             <p className="muted">
               {SOURCE_LABEL[item.source] || item.source}
-              {item.id ? ` · Reference ${item.id}` : ""}
+              {item.id ? ` · ${item.id}` : ""}
             </p>
           </details>
         );

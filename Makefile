@@ -33,6 +33,9 @@ seed:
 seed-host:
 	$(PYTHON) scripts/seed_database.py
 
+seed-demo-host:
+	$(PYTHON) scripts/seed_demo_portfolio.py
+
 ingest:
 	$(COMPOSE) exec api python scripts/ingest_market_data.py
 
@@ -41,6 +44,16 @@ ingest-host:
 
 listings-host:
 	$(PYTHON) scripts/sync_listings.py
+
+# Expand local search + market coverage (Docker API + DB).
+expand-data:
+	$(COMPOSE) exec api python scripts/sync_listings.py
+	$(COMPOSE) exec -e MARKET_DATA_PROVIDER=yahoo api python scripts/ingest_market_data.py --refresh-universe
+	$(COMPOSE) exec -e MARKET_DATA_PROVIDER=yahoo api python scripts/ingest_market_data.py --universe sp500 --limit 40
+	$(COMPOSE) exec -e MARKET_DATA_PROVIDER=yahoo api python scripts/ingest_market_data.py \
+		--ticker AAPL --ticker MSFT --ticker NVDA --ticker AMZN \
+		--ticker GOOGL --ticker META --ticker TSLA --ticker SPY \
+		--start 2024-01-02
 
 benchmark-data:
 	PYTHONPATH=. $(PYTHON) scripts/generate_benchmark_data.py

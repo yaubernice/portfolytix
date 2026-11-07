@@ -11,11 +11,13 @@ class PortfolioCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     description: str | None = None
+    is_paper: bool = False
 
 
 class PortfolioUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
+    is_paper: bool | None = None
 
 
 class PortfolioSummary(BaseModel):
@@ -25,6 +27,7 @@ class PortfolioSummary(BaseModel):
     user_id: UUID
     name: str
     description: str | None
+    is_paper: bool = False
     created_at: datetime
     updated_at: datetime
 

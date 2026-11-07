@@ -1,7 +1,9 @@
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Response, status
 
+from app.ai.grounding import figures_in_text_are_grounded
 from app.ai.local import LocalAssistant
 from app.ai.provider import AssistantModel
 from app.api.dependencies import get_assistant_model, get_research_service
@@ -11,9 +13,44 @@ from app.schemas.research import (
     FlagOut,
     RecommendationResponse,
 )
-from app.services.research_service import ResearchService
+from app.services.research_service import ResearchService, commentary_names_only
 
 router = APIRouter(tags=["research"])
+
+
+def _add_commentary(
+    result: RecommendationResponse,
+    model: AssistantModel,
+) -> RecommendationResponse:
+    notes = [
+        {"ticker": item.ticker, "points": item.points} for item in result.items
+    ]
+    if not notes:
+        return result
+    allowed = {item.ticker for item in result.items}
+    try:
+        drafted = model.comment_on_ideas(notes)
+        if not commentary_names_only(drafted, allowed):
+            raise ValueError("commentary named a company outside the list")
+        corpus = json.dumps(notes)
+        if not figures_in_text_are_grounded(drafted, corpus):
+            raise ValueError("commentary used a figure that was not supplied")
+        result.commentary = drafted
+        result.commentary_source = model.interpretation_source
+    except Exception:
+        local = LocalAssistant()
+        result.commentary = local.comment_on_ideas(notes)
+        result.commentary_source = local.interpretation_source
+    return result
+
+
+@router.get("/recommendations", response_model=RecommendationResponse)
+def market_recommendations(
+    service: ResearchService = Depends(get_research_service),
+    model: AssistantModel = Depends(get_assistant_model),
+) -> RecommendationResponse:
+    """Research leads that do not require a portfolio."""
+    return _add_commentary(service.recommendations(), model)
 
 
 @router.get(
@@ -25,19 +62,7 @@ def recommendations(
     service: ResearchService = Depends(get_research_service),
     model: AssistantModel = Depends(get_assistant_model),
 ) -> RecommendationResponse:
-    result = service.recommendations(portfolio_id)
-    notes = [
-        {"ticker": item.ticker, "points": item.points} for item in result.items
-    ]
-    if notes:
-        try:
-            result.commentary = model.comment_on_ideas(notes)
-            result.commentary_source = model.interpretation_source
-        except Exception:
-            local = LocalAssistant()
-            result.commentary = local.comment_on_ideas(notes)
-            result.commentary_source = local.interpretation_source
-    return result
+    return _add_commentary(service.recommendations(portfolio_id), model)
 
 
 @router.get(

@@ -91,11 +91,11 @@ Finnhub WebSocket or Alpha Vantage GLOBAL_QUOTE or simulator
  Next.js watchlist
 ```
 
-`QUOTE_PROVIDER=simulator` is the default and needs no API key. Its quotes are labeled `simulated`, not realtime. The worker follows active watchlist tickers, up to `QUOTE_MAX_SYMBOLS`. With no watchlist items it falls back to `QUOTE_SYMBOLS`. `QUOTE_PROVIDER=finnhub` subscribes to the trade stream and reconnects after a dropped socket. Those trades start as `realtime`; once `QUOTE_STALE_AFTER_SECONDS` passes they become `stale`. `QUOTE_PROVIDER=alpha_vantage` polls `GLOBAL_QUOTE`, labeled `delayed` unless `ALPHA_VANTAGE_REALTIME=true`. It can refresh fundamentals onto an existing row. Headlines stay in Redis (`finsight:news:{ticker}`) and are not invented by the simulator. Set `NEWS_PROVIDER=none` to skip news, or `finnhub` / `alpha_vantage` when a key should fill the cache.
+`QUOTE_PROVIDER=simulator` is the code default and needs no API key. Its quotes are labeled `simulated`, not realtime. The worker follows active holdings and watchlist tickers, up to `QUOTE_MAX_SYMBOLS`; with no book symbols it uses the configured featured list. `QUOTE_PROVIDER=finnhub` subscribes to the trade stream and reconnects after a dropped socket. Set `PROVIDER_MARKS=false` so Yahoo marks cannot replace Finnhub ticks. Finnhub trades start as `realtime`; once `QUOTE_STALE_AFTER_SECONDS` passes they become `stale`. Finnhub's free plan is for personal use, currently limits the WebSocket to 50 symbols, and does not grant redistribution rights for a public product. `QUOTE_PROVIDER=alpha_vantage` polls `GLOBAL_QUOTE`, labeled `delayed` unless the key is entitled to realtime data. Headlines stay in Redis and are not invented by the simulator.
 
 Each live quote exposes the provider timestamp, the time Portfolytix received it, age, source, and `timeliness`. Positions copy that freshness. `GET /ready` checks PostgreSQL and Redis. `GET /status` reports the quote provider, the latest ingest job, cache counters, the worker heartbeat, and operational counters. The worker heartbeat is Redis state, not a database row.
 
-The assistant still receives facts and metrics only. `AI_PROVIDER=openai` uses the Responses API by default (`AI_OPENAI_API=responses`) and can fall back to Chat Completions (`AI_OPENAI_API=chat`). Structured screens and interpretations use strict JSON schemas. `POST /portfolios/{id}/ask/stream` sends server-sent events after ownership and evidence are loaded. The browser never sees the API key. `POST /assistant/tools/execute` runs one authenticated allowlisted operation: portfolio analytics, screening, a current quote, fundamentals, or recent news. Fields named `sql`, `query`, `raw_sql`, or `database_query` are rejected.
+The assistant still receives facts and metrics only. OpenRouter uses `AI_PROVIDER=openai`, `AI_OPENAI_API=chat`, and `AI_BASE_URL=https://openrouter.ai/api/v1`. `POST /assistant/research` first retrieves bounded Tavily results and then asks the configured model to organize only that evidence; uncited external claims are removed. Tavily's free Researcher plan currently includes 1,000 credits per month, so web research runs only when the user explicitly asks. `POST /portfolios/{id}/ask/stream` sends server-sent events after ownership and evidence are loaded and may add cited research for qualitative/news questions. The browser never sees either API key. The model never receives a database session, SQL, or a general HTTP tool.
 
 The Next.js app is `web/`. It has a dashboard, user watchlists, screening, portfolio charts, a security page at `/securities/{ticker}`, and a streaming assistant. `/stocks/{ticker}` redirects to that security page. `/ui` remains the earlier static demo.
 
@@ -299,18 +299,18 @@ PostgreSQL prices
 
 | Provider | Env | Key | Notes |
 | --- | --- | --- | --- |
-| `stooq` (default) | `MARKET_DATA_PROVIDER=stooq` | none | CSV daily bars, US tickers as `{ticker}.us` |
+| `yahoo` | `MARKET_DATA_PROVIDER=yahoo` | none | Unofficial delayed daily chart bars. Review Yahoo terms before redistribution. |
+| `stooq` (code default) | `MARKET_DATA_PROVIDER=stooq` | none | CSV daily bars, US tickers as `{ticker}.us` |
 | `alpha_vantage` | `MARKET_DATA_PROVIDER=alpha_vantage` | `MARKET_DATA_API_KEY` | `TIME_SERIES_DAILY`. Free bars have no split-adjusted close; we store `adjusted_close = close`. Free tier is rate-limited. |
 
 The API key is read from the environment only. It is not logged, not accepted as a CLI flag, and not in git. `.env` is gitignored.
 
-**Idempotency.** Unique `(security_id, timestamp)` is the business key. A second ingest cannot insert a duplicate day. `ON CONFLICT DO UPDATE` overwrites OHLCV so a vendor revision (or a switch from seed random-walk to a real print) replaces the row. Unknown tickers are skipped (they must exist in `securities` from seed). One ticker failing (HTTP, rate limit) does not abort the others; the process exits non-zero if any ticker failed.
+**Idempotency.** Unique `(security_id, timestamp)` is the business key. A second ingest cannot insert a duplicate day. `ON CONFLICT DO UPDATE` overwrites OHLCV so a vendor revision replaces the row. Unknown tickers are skipped. One ticker failing (HTTP, rate limit) does not abort the others; the process exits non-zero if any ticker failed.
 
 ```bash
-make seed          # synthetic bars, demo user
-make ingest        # vendor bars for the seeded universe
-# or:
-python scripts/ingest_market_data.py --ticker AAPL --start 2024-01-02 --provider stooq
+export MARKET_DATA_PROVIDER=yahoo
+python scripts/ingest_market_data.py --refresh-universe
+python scripts/ingest_market_data.py --universe sp500 --limit 5
 ```
 
 Tests never call a live vendor. Parsers are unit-tested with fixture JSON/CSV; ingest is tested with a `FakeProvider`.
@@ -828,12 +828,15 @@ Copy `.env.example` to `.env` only if you run Uvicorn on the host against the pu
 | `JWT_ALGORITHM` | Allowed JWT signing algorithm (default `HS256`) |
 | `JWT_ISSUER` | Required token issuer (default `finsight`) |
 | `JWT_ACCESS_TOKEN_MINUTES` | Access-token lifetime (default `30`) |
-| `AI_PROVIDER` | `local` template/rules, or `openai` |
+| `AI_PROVIDER` | `local` template/rules, or `openai` (also used for OpenRouter-compatible chat) |
 | `AI_OPENAI_API` | `responses` (default) or `chat` |
 | `AI_API_KEY` | Chat API key. Empty for `local`. Never commit it |
 | `AI_BASE_URL` | OpenAI-compatible base URL |
 | `AI_MODEL` | Chat model name |
 | `AI_TIMEOUT_SECONDS` | Chat request timeout (default `20`) |
+| `WEB_RESEARCH_PROVIDER` | `none` or `tavily` |
+| `WEB_RESEARCH_API_KEY` | Tavily key; server-side only |
+| `WEB_RESEARCH_MAX_RESULTS` | Maximum sources retrieved for one explicit research question |
 | `QUOTE_PROVIDER` | `simulator`, `finnhub`, or `alpha_vantage` |
 | `QUOTE_SYMBOLS` | Comma-separated tickers for the quote worker |
 | `QUOTE_POLL_SECONDS` | Poll interval for simulator and Alpha Vantage |
@@ -852,11 +855,11 @@ Copy `.env.example` to `.env` only if you run Uvicorn on the host against the pu
 | `FINNHUB_API_KEY` | Finnhub token. Empty for `simulator` |
 | `NEWS_TTL_SECONDS` | Redis lifetime of cached headlines (default `900`) |
 | `CORS_ORIGINS` | Browser origins allowed to call the API |
-| `NEXT_PUBLIC_API_URL` | API base URL baked into the Next.js client |
+| `NEXT_PUBLIC_API_URL` | Vercel build-time API address for the Next.js client. The API process does not read it |
 | `RISK_FREE_RATE` | Annual decimal for Sharpe (default `0.05`) |
 | `TRADING_DAYS_PER_YEAR` | Annualization factor (default `252`) |
-| `MARKET_DATA_PROVIDER` | `stooq` or `alpha_vantage` |
-| `MARKET_DATA_API_KEY` | Alpha Vantage key (empty for Stooq) |
+| `MARKET_DATA_PROVIDER` | `yahoo`, `stooq`, or `alpha_vantage`; this selects the adapter |
+| `MARKET_DATA_API_KEY` | Alpha Vantage key; it does not select the provider |
 | `SCHEDULER_ENABLED` | Start APScheduler on API boot (default `true`) |
 | `MARKET_DATA_CRON` | 5-field cron in UTC (default `0 22 * * *`) |
 | `MARKET_DATA_LOOKBACK_DAYS` | Inclusive window ending today (default `7`) |
@@ -869,6 +872,42 @@ Copy `.env.example` to `.env` only if you run Uvicorn on the host against the pu
 | `REDIS_SOCKET_TIMEOUT_SECONDS` | Fail-open timeout (default `0.2`) |
 
 Local Compose credentials (`finsight` / `finsight`) are development defaults, not production secrets.
+
+### Production on a VPS and Vercel
+
+`docker-compose.prod.yml` runs PostgreSQL, Redis, an Alembic upgrade to head, the FastAPI API, and the quote worker. The Next.js app in `web/` is not in that file. Vercel builds `web/` with its root directory set to `web`. `web/lib/api.js` reads `NEXT_PUBLIC_API_URL` when Vercel runs `next build`, so set that variable in Vercel before the build. Do not put `AI_API_KEY`, `JWT_SECRET_KEY`, or `POSTGRES_PASSWORD` in Vercel.
+
+Copy `.env.production.example` to `.env.production` on the VPS and replace every placeholder. `.env.production` is gitignored. The example file has no real secrets. Generate the password and the JWT secret with `secrets.token_hex`; the application rejects `finsight`, the development JWT, and any value that starts with `replace-with`.
+
+Required on the VPS:
+
+| Variable | Purpose |
+| --- | --- |
+| `POSTGRES_PASSWORD` | Unique database password of at least 16 characters. Compose builds `DATABASE_URL` from it. There is no `finsight` fallback |
+| `JWT_SECRET_KEY` | Random HS256 signing secret, at least 32 characters. There is no development fallback |
+| `CORS_ORIGINS` | Comma-separated `https://` origins of the Vercel site. A preview URL is a separate origin |
+
+Set these on the API host when a remote model is used. With `AI_PROVIDER=local` the key stays empty. The quote worker and the migration container receive the same values because they load the same settings.
+
+| Variable | Purpose |
+| --- | --- |
+| `AI_PROVIDER` | `local` or `openai` |
+| `AI_OPENAI_API` | `responses` or `chat` |
+| `AI_BASE_URL` | OpenAI-compatible base URL, kept on the API host |
+| `AI_MODEL` | Model name |
+| `AI_API_KEY` | Bearer token for that host. Never commit it and never add it to Vercel |
+
+The production example uses Finnhub for personal-demo quotes/news, Yahoo for unofficial delayed daily bars, OpenRouter for model wording, and Tavily for cited web research. `FINNHUB_API_KEY`, `AI_API_KEY`, and `WEB_RESEARCH_API_KEY` stay on the API host. This configuration is not permission to redistribute Finnhub or Yahoo data in a public/commercial product.
+
+PostgreSQL and Redis publish no host ports. The API publishes `127.0.0.1:8000` only, for an HTTPS proxy on the same machine. The named volume `finsight_pg` is the database data. `docker compose down` does not remove it. Do not add `-v`. The `migrate` service runs `alembic upgrade head` after Postgres is healthy, and the API and quote worker wait until that command exits successfully. Authentication is unchanged: the API still signs its own HS256 tokens.
+
+Check the file before any server starts:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml config
+```
+
+That command only renders the configuration. It does not create containers.
 
 ## Makefile
 

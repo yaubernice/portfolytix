@@ -3,13 +3,43 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { CompanyLogo, EmptyState, ErrorState, money, Pagination, percent, Skeleton, StatusBadge, TickerIdentity, Toast } from "./UI";
+import { useDisplayCurrency } from "./DisplayCurrency";
+import { CompanyLogo, EmptyState, ErrorState, Pagination, percent, Skeleton, StatusBadge, TickerIdentity, Toast } from "./UI";
 import { useQuotes } from "./useQuotes";
 
 const PAGE_SIZE = 100;
 
+function alertLabel(item, price) {
+  if (item.target_price == null || price == null || price === "") return item.target_price == null ? "" : "Waiting for a quote";
+  const last = Number(price);
+  const target = Number(item.target_price);
+  if (!Number.isFinite(last) || !Number.isFinite(target)) return "";
+  if (item.alert_when === "above" && last >= target) return "Target reached";
+  if (item.alert_when === "below" && last <= target) return "Target reached";
+  return "Watching";
+}
+
+function TargetEditor({ item, price, onSave }) {
+  const [target, setTarget] = useState(item.target_price == null ? "" : String(item.target_price));
+  const [when, setWhen] = useState(item.alert_when || "above");
+  const status = alertLabel(item, price);
+  return (
+    <form className="row" onSubmit={(event) => { event.preventDefault(); onSave({ target_price: target, alert_when: when, clear_target: false }); }}>
+      <input aria-label={`${item.ticker} target price`} inputMode="decimal" placeholder="Price" value={target} onChange={(event) => setTarget(event.target.value)} />
+      <select aria-label={`${item.ticker} alert direction`} value={when} onChange={(event) => setWhen(event.target.value)}>
+        <option value="above">Above</option>
+        <option value="below">Below</option>
+      </select>
+      <button type="submit">Save</button>
+      {item.target_price != null ? <button type="button" onClick={() => onSave({ target_price: null, alert_when: null, clear_target: true })}>Clear</button> : null}
+      {status ? <span className="muted">{status}</span> : null}
+    </form>
+  );
+}
+
 export default function Watchlist() {
   const { quotes, status } = useQuotes();
+  const { money } = useDisplayCurrency();
   const [lists, setLists] = useState([]);
   const [activeId, setActiveId] = useState("");
   const [detail, setDetail] = useState(null);
@@ -17,6 +47,8 @@ export default function Watchlist() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [newName, setNewName] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
   const [search, setSearch] = useState("");
   const [results, setResults] = useState([]);
   const [toast, setToast] = useState("");
@@ -59,8 +91,8 @@ export default function Watchlist() {
       return undefined;
     }
     const timer = setTimeout(() => {
-      api(`/securities/search?q=${encodeURIComponent(search)}&limit=8`)
-        .then((body) => setResults(body.items))
+      api(`/securities/search?q=${encodeURIComponent(search)}&limit=12`)
+        .then((body) => setResults(body.items || []))
         .catch(() => setResults([]));
     }, 200);
     return () => clearTimeout(timer);
@@ -79,11 +111,17 @@ export default function Watchlist() {
     } catch (err) { setError(err.message); }
   }
 
-  async function renameList() {
-    const name = window.prompt("Watchlist name", detail?.name || "");
-    if (!name?.trim()) return;
+  function beginRename() {
+    setRenameValue(detail?.name || "");
+    setRenaming(true);
+  }
+
+  async function renameList(event) {
+    event.preventDefault();
+    if (!renameValue.trim()) return;
     try {
-      await api(`/watchlists/${activeId}`, { method: "PATCH", body: JSON.stringify({ name: name.trim() }) });
+      await api(`/watchlists/${activeId}`, { method: "PATCH", body: JSON.stringify({ name: renameValue.trim() }) });
+      setRenaming(false);
       await Promise.all([loadLists(), loadDetail()]);
       setToast("Watchlist renamed");
     } catch (err) { setError(err.message); }
@@ -108,6 +146,17 @@ export default function Watchlist() {
       setSearch("");
       await Promise.all([loadLists(), loadDetail()]);
       setToast(`${security.ticker} added`);
+    } catch (err) { setError(err.message); }
+  }
+
+  async function saveTarget(item, payload) {
+    try {
+      await api(`/watchlists/${activeId}/items/${item.security_id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      await loadDetail();
+      setToast(payload.clear_target ? `${item.ticker} target cleared` : `${item.ticker} target saved`);
     } catch (err) { setError(err.message); }
   }
 
@@ -154,10 +203,22 @@ export default function Watchlist() {
               <p className="muted">{detail.items_total} {detail.items_total === 1 ? "security" : "securities"}</p>
             </div>
             <div className="row">
-              <button type="button" onClick={renameList}>Rename</button>
+              <button type="button" onClick={beginRename}>Rename</button>
               <button type="button" className="danger-button" onClick={deleteList}>Delete</button>
             </div>
           </div>
+          {renaming ? (
+            <form className="stack-form rename-form" onSubmit={renameList}>
+              <label className="field" htmlFor="watchlist-rename">
+                Watchlist name
+                <input id="watchlist-rename" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} maxLength={200} required autoFocus />
+              </label>
+              <div className="row">
+                <button className="primary" type="submit">Save name</button>
+                <button type="button" onClick={() => setRenaming(false)}>Cancel</button>
+              </div>
+            </form>
+          ) : null}
           <div className="search-picker">
             <label className="field">
               Add a security
@@ -178,7 +239,7 @@ export default function Watchlist() {
             <>
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>Security</th><th>Exchange</th><th className="numeric">Last</th><th className="numeric">Change</th><th>Freshness</th><th><span className="sr-only">Actions</span></th></tr></thead>
+                  <thead><tr><th>Security</th><th>Exchange</th><th className="numeric">Last</th><th className="numeric">Change</th><th>Freshness</th><th>Target</th><th><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>
                     {detail.items.map((item) => {
                       const quote = quotes[item.ticker];
@@ -191,6 +252,9 @@ export default function Watchlist() {
                           <td className={`numeric ${tone}`}>{money(quote?.price)}</td>
                           <td className={`numeric ${tone}`}>{quote ? `${money(quote.change)} (${percent(quote.change_percent)})` : "—"}</td>
                           <td><StatusBadge value={quote?.timeliness || "waiting"} /></td>
+                          <td>
+                            <TargetEditor item={item} price={quote?.price} onSave={(payload) => saveTarget(item, payload)} />
+                          </td>
                           <td className="numeric"><button type="button" onClick={() => removeItem(item)} aria-label={`Remove ${item.ticker}`}>Remove</button></td>
                         </tr>
                       );

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import LogoMark from "../components/Logo";
 import { api, readToken, writeToken } from "../lib/api";
 
 export default function LoginPage() {
@@ -56,22 +57,17 @@ export default function LoginPage() {
 
   return (
     <main className="auth-page">
-      <section className="auth-welcome" aria-labelledby="auth-title">
-        <p className="auth-brand"><span aria-hidden="true">Px</span> Portfolytix</p>
-        <h1 id="auth-title">Know what you own. Understand why it moves.</h1>
-        <p className="auth-lead">Figures come from the transactions and prices stored for a portfolio. Portfolytix does not tell you to buy or sell, and it does not forecast a future result.</p>
-        <ul className="auth-points">
-          <li>See what a portfolio is worth, and which holdings moved it.</li>
-          <li>Ask a question. The answer uses those figures, or says the evidence does not contain it.</li>
-          <li>Quotes can be delayed. A refresh does not make a delayed quote live.</li>
-        </ul>
-        <div className="auth-motif" aria-hidden="true">
-          <p>Weights in a portfolio</p>
-          <div className="auth-bar"><span style={{ width: "62%" }} />Largest holding</div>
-          <div className="auth-bar"><span style={{ width: "24%" }} />Next holding</div>
-          <div className="auth-bar"><span style={{ width: "14%" }} />The rest</div>
+      <section className="auth-welcome" aria-labelledby="auth-brand">
+        <div className="auth-welcome-copy">
+          <p className="auth-brand" id="auth-brand">
+            <LogoMark size={44} />
+            <span>Portfolytix</span>
+          </p>
+          <h1>Clarity for what you already own.</h1>
+          <p className="auth-lead">
+            Stored transactions and prices, explained in plain language — not tips, not forecasts.
+          </p>
         </div>
-        <p className="auth-caption">A drawing of weights. Not a live portfolio, and not a return.</p>
       </section>
       <section className="auth-form-wrap">
         <form className="auth-form" onSubmit={submit} aria-busy={busy}>
@@ -79,8 +75,8 @@ export default function LoginPage() {
             <button type="button" aria-pressed={signingIn} onClick={() => { setMode("signin"); setError(""); }}>Sign in</button>
             <button type="button" aria-pressed={!signingIn} onClick={() => { setMode("register"); setError(""); setNotice(""); }}>Create account</button>
           </div>
-          <h2>{signingIn ? "Sign in" : "Create account"}</h2>
-          <p className="muted">{signingIn ? "Use the email and password for this workspace." : "Create an account with an email and a password of at least 8 characters."}</p>
+          <h2>{signingIn ? "Welcome back" : "Create account"}</h2>
+          <p className="muted">{signingIn ? "Sign in to open your workspace." : "Use an email and a password of at least 8 characters."}</p>
           <label className="field" htmlFor="auth-email">Email
             <input id="auth-email" name="email" type="email" required autoComplete="username" inputMode="email" disabled={busy} />
           </label>
@@ -102,7 +98,7 @@ export default function LoginPage() {
             </span>
           </div>
           <button className="primary" type="submit" disabled={busy}>
-            {busy ? (signingIn ? "Signing in…" : "Creating account…") : (signingIn ? "Log in" : "Create account")}
+            {busy ? (signingIn ? "Signing in…" : "Creating account…") : (signingIn ? "Sign in" : "Create account")}
           </button>
           {notice ? <p className="auth-notice" role="status">{notice}</p> : null}
           <p className="error" role={error ? "alert" : undefined}>{error}</p>

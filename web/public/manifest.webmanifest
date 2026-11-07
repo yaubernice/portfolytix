@@ -1,0 +1,17 @@
+{
+  "name": "Portfolytix",
+  "short_name": "Portfolytix",
+  "description": "Clarity for what you already own.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#eaf1f8",
+  "theme_color": "#0f1c2e",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

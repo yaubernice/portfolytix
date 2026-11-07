@@ -8,6 +8,9 @@ os.environ["SCHEDULER_ENABLED"] = "false"
 os.environ["CACHE_ENABLED"] = "false"
 # Phase 12 tests must not call a live language-model API.
 os.environ["AI_PROVIDER"] = "local"
+# Ask tests stay on portfolio evidence. A local .env must not call Tavily
+# keyless search and force citation_required on "why" questions.
+os.environ["WEB_RESEARCH_PROVIDER"] = "none"
 # Quote tests use an in-memory store. The worker is a separate process.
 os.environ["QUOTE_PROVIDER"] = "simulator"
 # News tests stay on the cache. A local .env must not call a headline vendor.

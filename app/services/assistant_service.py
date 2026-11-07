@@ -20,6 +20,7 @@ from app.ai.evidence import (
     build_evidence,
     direct_answer,
 )
+from app.ai.grounding import figures_in_text_are_grounded
 from app.ai.local import LocalAssistant
 from app.ai.parsing import drop_unmentioned, parse_screen_text
 from app.ai.provider import AssistantModel
@@ -28,6 +29,7 @@ from app.core.exceptions import AppError
 from app.core.metrics import get_metrics
 from app.db.models import Fundamental, Security
 from app.quotes.store import QuoteStore
+from app.research.provider import WebResearchProvider
 from app.schemas.analytics import AnalyticsOut
 from app.schemas.assistant import AssistantAnswer, EvidenceItem
 from app.schemas.common import decimal_to_json
@@ -62,13 +64,16 @@ class AssistantService:
         analytics: AnalyticsService,
         model: AssistantModel,
         quotes: QuoteStore | None = None,
+        web_research: WebResearchProvider | None = None,
     ) -> None:
         self.analytics = analytics
         self.model = model
         self.quotes = quotes
+        self.web_research = web_research
 
     def ask(self, portfolio_id: UUID, question: str) -> AssistantAnswer:
         prepared = self.prepare(portfolio_id)
+        self._attach_web_research(prepared.evidence, question)
         _detach_chart(prepared.evidence)
         _remember_direct(prepared.evidence, question)
         if answer_is_closed(prepared.evidence):
@@ -82,6 +87,11 @@ class AssistantService:
         source = self.model.interpretation_source
         try:
             interpretation = self.model.interpret(question, prepared.evidence)
+            if not figures_in_text_are_grounded(
+                interpretation,
+                _evidence_text(prepared.evidence),
+            ):
+                raise ValueError("interpretation used a figure that was not supplied")
         except Exception:
             get_metrics().increment("ai.errors")
             if not self._can_fallback():
@@ -128,6 +138,7 @@ class AssistantService:
         prepared: AssistantEvidence,
         question: str,
     ) -> Iterator[str]:
+        self._attach_web_research(prepared.evidence, question)
         _remember_direct(prepared.evidence, question)
         if answer_is_closed(prepared.evidence):
             source = "template"
@@ -136,6 +147,7 @@ class AssistantService:
                 "question": question,
                 "facts": prepared.evidence["facts"],
                 "metrics": prepared.evidence["metrics"],
+                "sources": prepared.evidence.get("sources") or [],
                 "chart": _detach_chart(prepared.evidence),
                 "interpretation_source": source,
                 "disclaimer": _DISCLAIMER,
@@ -150,6 +162,7 @@ class AssistantService:
             "question": question,
             "facts": prepared.evidence["facts"],
             "metrics": prepared.evidence["metrics"],
+            "sources": prepared.evidence.get("sources") or [],
             "chart": _detach_chart(prepared.evidence),
             "interpretation_source": source,
             "disclaimer": _DISCLAIMER,
@@ -161,8 +174,15 @@ class AssistantService:
             for chunk in self.model.stream_interpret(question, prepared.evidence):
                 if chunk:
                     parts.append(chunk)
-                    yield _sse("text", {"delta": chunk})
-            source = _reported_source(source, "".join(parts), prepared.evidence)
+            text = "".join(parts)
+            if not figures_in_text_are_grounded(
+                text,
+                _evidence_text(prepared.evidence),
+            ):
+                raise ValueError("interpretation used a figure that was not supplied")
+            for chunk in parts:
+                yield _sse("text", {"delta": chunk})
+            source = _reported_source(source, text, prepared.evidence)
             yield _sse(
                 "done",
                 {"done": True, "interpretation_source": source},
@@ -281,6 +301,62 @@ class AssistantService:
             and self.model.interpretation_source != "template"
         )
 
+    def _attach_web_research(self, evidence: dict, question: str) -> None:
+        if self.web_research is None or not _needs_web_research(question):
+            return
+        tickers = [
+            str(item.get("name", "")).split(":", 1)[1]
+            for item in evidence.get("facts", [])
+            if str(item.get("name", "")).startswith("position:")
+        ]
+        query = " ".join([question, *tickers[:8]])
+        try:
+            rows = self.web_research.search(
+                query,
+                max_results=settings.web_research_max_results,
+            )
+        except Exception:
+            evidence["research_unavailable"] = True
+            return
+        existing = [
+            int(match.group(1))
+            for item in [*evidence.get("facts", []), *evidence.get("metrics", [])]
+            if (match := re.fullmatch(r"e(\d+)", str(item.get("id", ""))))
+        ]
+        sequence = max(existing, default=0) + 1
+        for row in rows:
+            evidence["facts"].append(
+                {
+                    "kind": "fact",
+                    "id": f"e{sequence}",
+                    "name": f"web:{row.publisher}",
+                    "label": row.title,
+                    "value": row.excerpt,
+                    "source": "provider",
+                    "method": "Cited public web result retrieved for this question.",
+                    "as_of": row.published_at,
+                    "unit": "",
+                    "availability": "available",
+                    "title": row.title,
+                    "url": row.url,
+                    "publisher": row.publisher,
+                    "published_at": row.published_at,
+                }
+            )
+            sequence += 1
+        if rows:
+            evidence["citation_required"] = True
+            evidence["sources"] = [
+                {
+                    "id": f"e{index}",
+                    "title": row.title,
+                    "url": row.url,
+                    "publisher": row.publisher,
+                    "published_at": row.published_at,
+                }
+                for index, row in enumerate(rows, start=max(existing, default=0) + 1)
+            ]
+
 
 def _stored_headlines(
     quotes: QuoteStore,
@@ -306,9 +382,26 @@ def _stored_headlines(
             if not isinstance(row, dict):
                 continue
             headline = " ".join(str(row.get("headline") or "").split())
-            if headline:
-                found.append((line.ticker, headline[:180]))
+            if not headline:
+                continue
+            summary = " ".join(str(row.get("summary") or "").split())
+            if summary and summary.lower() != headline.lower():
+                text = f"{headline} — {summary}"
+            else:
+                text = headline
+            found.append((line.ticker, text[:420]))
     return found[:8]
+
+
+_WEB_RESEARCH_TERMS = re.compile(
+    r"\b(news|latest|recent|industry|regulat|policy|lawsuit|supplier|"
+    r"competitor|development|event|risk|qualitative|why|outlook)\b",
+    re.IGNORECASE,
+)
+
+
+def _needs_web_research(question: str) -> bool:
+    return _WEB_RESEARCH_TERMS.search(question) is not None
 
 
 def _detach_chart(evidence: dict) -> list:
@@ -321,6 +414,10 @@ def _remember_direct(evidence: dict, question: str) -> None:
     focused = direct_answer(question, evidence)
     if focused:
         evidence["direct_answer"] = focused
+
+
+def _evidence_text(evidence: dict) -> str:
+    return json.dumps(evidence, default=str)
 
 
 def _reported_source(source: str, interpretation: str, evidence: dict) -> str:

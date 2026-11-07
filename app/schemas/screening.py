@@ -258,7 +258,7 @@ class ScreenResponse(BaseModel):
     offset: int
     applied: ScreenApplied
     disclaimer: str = (
-        "Synthetic or stored fundamentals, not investment advice. "
+        "Stored non-seed fundamentals, not investment advice. "
         "Ratios are decimals (0.15 = 15%). P/E is a multiple. "
         "market_cap is USD. A sector or asset type can match a security "
         "that has no fundamental snapshot. A missing ratio is omitted, not zero."

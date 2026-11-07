@@ -8,13 +8,18 @@ import Nav from "../../components/Nav";
 import { EmptyState, ErrorState, number, Pagination, percent, Skeleton, TickerIdentity } from "../../components/UI";
 import { api } from "../../lib/api";
 
-const RANGE_FILTERS = [
-  ["roe", "ROE"], ["pe", "P/E"], ["revenue_growth", "Revenue growth"],
-  ["market_cap", "Market cap (USD)"], ["eps", "EPS"], ["revenue", "Revenue"],
-  ["profit_margin", "Profit margin"], ["dividend_yield", "Dividend yield"],
-  ["beta", "Beta"], ["ebitda", "EBITDA"], ["price_to_book", "Price / book"],
-  ["price_to_sales", "Price / sales"], ["roa", "ROA"], ["earnings_growth", "Earnings growth"],
+const FILTER_GROUPS = [
+  ["Valuation", [["pe", "P/E"], ["price_to_book", "Price / book"], ["price_to_sales", "Price / sales"], ["dividend_yield", "Dividend yield"]]],
+  ["Growth", [["revenue_growth", "Revenue growth"], ["earnings_growth", "Earnings growth"]]],
+  ["Profitability", [["roe", "ROE"], ["roa", "ROA"], ["profit_margin", "Profit margin"], ["eps", "EPS"]]],
+  ["Size", [["market_cap", "Market cap (USD)"], ["revenue", "Revenue"], ["ebitda", "EBITDA"], ["beta", "Beta"]]],
 ];
+const RANGE_FILTERS = FILTER_GROUPS.flatMap(([, rows]) => rows);
+const PRESETS = {
+  Value: { pe_max: "15", price_to_book_max: "3" },
+  Quality: { roe_min: "0.15", profit_margin_min: "0.1" },
+  Growth: { revenue_growth_min: "0.1", earnings_growth_min: "0.1" },
+};
 
 const EMPTY_FILTERS = Object.fromEntries(RANGE_FILTERS.flatMap(([key]) => [[`${key}_min`, ""], [`${key}_max`, ""]]));
 const RATIO_FIELDS = new Set(["roe", "revenue_growth", "profit_margin", "dividend_yield", "roa", "earnings_growth"]);
@@ -112,16 +117,35 @@ export default function ScreenPage() {
         <header className="page-header"><div><p className="eyebrow">Research</p><h1>Security screening</h1><p className="muted">Filter stored securities. A ratio only matches a company that has that figure stored.</p></div></header>
         <section className="panel">
           <div className="panel-header"><h2>Structured filters</h2><button type="button" onClick={() => setFilters({ ...EMPTY_FILTERS, sector: "", industry: "", exchange: "", asset_type: "", search: "" })}>Clear</button></div>
+          <div className="row" aria-label="Filter presets">
+            {Object.entries(PRESETS).map(([name, preset]) => (
+              <button type="button" key={name} onClick={() => setFilters({ ...EMPTY_FILTERS, sector: "", industry: "", exchange: "", asset_type: "", search: "", ...preset })}>{name}</button>
+            ))}
+          </div>
+          <div className="row filter-chips" aria-label="Active filters">
+            {Object.entries(filters).filter(([, value]) => String(value).trim()).map(([key, value]) => (
+              <button className="filter-chip" type="button" key={key} onClick={() => updateFilter(key, "")}>{key.replaceAll("_", " ")} {value} ×</button>
+            ))}
+          </div>
           <form onSubmit={(event) => { event.preventDefault(); runScreen(0); }}>
             <div className="filter-grid">
               {["sector", "industry", "exchange"].map((key) => <label className="field" key={key}>{key[0].toUpperCase() + key.slice(1)}<input value={filters[key]} onChange={(event) => updateFilter(key, event.target.value)} /></label>)}
               <label className="field">Asset type<select value={filters.asset_type} onChange={(event) => updateFilter("asset_type", event.target.value)}><option value="">Any</option><option value="equity">Equity</option><option value="etf">ETF</option><option value="fund">Fund</option><option value="index">Index</option><option value="other">Other</option></select></label>
               <label className="field">Ticker or name<input value={filters.search} onChange={(event) => updateFilter("search", event.target.value)} placeholder="VOO or Hang Seng" /></label>
-              {RANGE_FILTERS.map(([key, label]) => (
-                <div className="field" key={key}><span>{label}</span><div className="row">
-                  <input aria-label={`${label} minimum`} inputMode="decimal" placeholder="Min" value={filters[`${key}_min`]} onChange={(event) => updateFilter(`${key}_min`, event.target.value)} />
-                  <input aria-label={`${label} maximum`} inputMode="decimal" placeholder="Max" value={filters[`${key}_max`]} onChange={(event) => updateFilter(`${key}_max`, event.target.value)} />
-                </div></div>
+            </div>
+            <div className="filter-groups">
+              {FILTER_GROUPS.map(([title, rows]) => (
+                <details key={title}>
+                  <summary>{title}</summary>
+                  <div className="filter-grid">
+                    {rows.map(([key, label]) => (
+                      <div className="field" key={key}><span>{label}</span><div className="row">
+                        <input aria-label={`${label} minimum`} inputMode="decimal" placeholder="Min" value={filters[`${key}_min`]} onChange={(event) => updateFilter(`${key}_min`, event.target.value)} />
+                        <input aria-label={`${label} maximum`} inputMode="decimal" placeholder="Max" value={filters[`${key}_max`]} onChange={(event) => updateFilter(`${key}_max`, event.target.value)} />
+                      </div></div>
+                    ))}
+                  </div>
+                </details>
               ))}
             </div>
             <div className="row">
