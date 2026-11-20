@@ -1,6 +1,6 @@
 # Portfolytix
 
-Personal finance workspace with portfolio analytics, market data, and short-term explanations.
+Portfolio workspace for personal holdings, with analytics and plain-language explanations.
 
 ## Overview
 
