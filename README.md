@@ -1,27 +1,64 @@
 # Portfolytix
 
-Personal finance analytics API. Phases 1–12 are the learning backend: FastAPI, PostgreSQL, Alembic, portfolio analytics, daily-bar ingest, screening, a 10-million-row benchmark, Redis caching, JWT, and an assistant that answers from stored portfolio evidence. Live quotes, a separate market worker, structured model output, and a Next.js dashboard sit on that same boundary. Holdings are derived from the ledger. `/ui` is the small static demo. `web/` is the live dashboard.
+Personal finance workspace with portfolio analytics, market data, and short-term explanations.
 
 ## Overview
 
-The running stack exposes:
+Portfolytix is a production-shaped personal finance stack: FastAPI, PostgreSQL, Alembic, Redis, and a Next.js dashboard. Holdings are derived from the ledger. Analytics, screening, live quotes, and an evidence-bound assistant sit behind JWT ownership checks. `/ui` is the small static demo; `web/` is the live dashboard. Schema changes go through Alembic, not `create_all()`.
 
-- `GET /health` → `{"status":"ok"}`
-- `GET /docs` — FastAPI's interactive OpenAPI UI
-- Portfolio CRUD, transactions, derived holdings, and analytics (see [API Documentation](#api-documentation))
-- Market-data ingest into `prices` (see [Data Pipeline](#data-pipeline))
-- Scheduled `update_market_data` job plus `GET /jobs` (see [Background Jobs](#background-jobs))
-- Structured `POST /screen` over seeded fundamentals (see [Screening](#screening))
-- Measured `EXPLAIN ANALYZE` workflow (see [Performance Engineering](#performance-engineering))
-- Redis caching and `GET /cache/stats` (see [Caching Strategy](#caching-strategy))
-- Demo UI at `/ui` (login, portfolios, analytics, screening, ask, jobs, cache)
-- PostgreSQL 16 on the Compose network (published on host port `15432`)
+I built it to practise a realistic backend: settings from the environment, structured logs, migrations as versioned code, and a Compose file that boots the API and database together.
 
-Schema changes go through Alembic, not `Base.metadata.create_all()`. Phase 2 added the five domain tables. Phase 3 adds HTTP access to portfolios and fills. Phase 4 adds portfolio analytics. Phase 5 ingests vendor daily bars. Phase 6 schedules ingest. Phase 7 adds safe screening. Phase 8 measures and optimizes price-history reads. Phase 9 caches analytics and screens while PostgreSQL remains authoritative. Phase 10 adds password authentication, signed access tokens, and portfolio ownership checks. Phase 11 adds the test layers for those behaviors. Phase 12 adds an assistant that answers from stored evidence and turns a narrow English screen into the same structured filter.
+## Features
 
-## Why I built this
+- Portfolio CRUD, transactions, derived holdings, and TWR / volatility / Sharpe / drawdown analytics
+- Market-data ingest, scheduled jobs, and structured fundamental screening
+- Redis read-through cache with versioned invalidation
+- JWT auth with Argon2 passwords and owner-scoped portfolio access
+- Assistant that answers from stored portfolio evidence (optional remote model)
+- Live quote worker and Next.js dashboard (`web/`), plus static demo at `/ui`
+- Measured query benchmarks and GitHub Actions CI
 
-I wanted a realistic place to practice a production-shaped backend: settings from the environment, structured logs, migrations as versioned code, and a Compose file that actually boots the API and the database together. Portfolytix's product idea is personal portfolio analytics. Phase 2 locks the relational model so later APIs and analytics sit on constraints and indexes instead of growing out of a single script.
+## Stack
+
+- Python 3.12, FastAPI, Uvicorn, Pydantic, SQLAlchemy 2, Alembic
+- PostgreSQL 16, Redis 7, APScheduler
+- Next.js dashboard in `web/`
+- pytest, httpx, Ruff, Docker Compose
+
+## Setup
+
+```bash
+docker compose up --build
+# or: make up
+make migrate
+make seed
+```
+
+Host tests:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+make test
+make lint
+```
+
+Copy `.env.example` to `.env` only when running Uvicorn on the host against the published Postgres port. Compose injects `DATABASE_URL` for the API service. See [Local development](#local-development) for environment variables and screenshots.
+
+## Usage
+
+Once Compose is up:
+
+- Health: http://127.0.0.1:18421/health
+- OpenAPI: http://127.0.0.1:18421/docs
+- Demo UI: http://127.0.0.1:18421/ui/
+- Live dashboard: http://127.0.0.1:3000/ (`make web`, with `make quote-worker` for moving prices)
+- Redis: `localhost:16379` (cache protocol, not HTTP)
+
+Useful endpoints and topics (details below): portfolio REST and analytics, `POST /screen`, `GET /jobs`, `GET /cache/stats`, live quotes, and the assistant ask routes.
+
+Stop with `make down`.
 
 ## Architecture
 
@@ -113,6 +150,7 @@ The Next.js app is `web/`. It has a dashboard, user watchlists, screening, portf
 | Query benchmark + covering price index | Built |
 | Redis read-through cache | Built |
 | Test suite (unit, API, PostgreSQL integration) | Built |
+| GitHub Actions CI (lint + pytest + Postgres) | Built |
 | AI assistant and natural-language screen | Built (local rules by default; optional Responses or chat API) |
 | Security universe, watchlists, controlled historical ingest | Built |
 | Live quotes, news cache, freshness, readiness | Built |
@@ -668,7 +706,7 @@ Measured against the seeded seven-security screen on the same machine, with the 
 
 Redis recorded the miss and the twenty hits. The repeated request was 0.172 ms faster than the disabled run. The cold request was slower with caching because it pays for the miss plus the Redis write. This screen only touches seven fundamental rows, so PostgreSQL is already about 1.5 ms once its own cache is warm. The counters prove the cache path; they do not show a large latency win on this small query.
 
-## Tech Stack
+## Stack details
 
 | Piece | Why |
 | --- | --- |
@@ -735,47 +773,24 @@ Phase 11 keeps the existing tests and fills the gaps the earlier phases left. Th
 | --- | --- | --- | --- |
 | Unit | `tests/unit` | Holdings, time-weighted return, volatility, Sharpe, drawdown, screening filters, request validation, ingest rules | In-memory SQLite, or no database |
 | API | `tests/api` | Registration, login, token rejection, ownership, CRUD, invalid bodies, missing resources | SQLite through a `get_db` override |
-| Integration | `tests/integration` | Alembic schema, portfolio ledger, PostgreSQL price upsert | PostgreSQL |
+| Integration | `tests/integration` | Alembic schema, portfolio ledger, idempotent upsert, invalid bars, partial ticker failure | PostgreSQL |
 
 API tests send a Bearer token for the default user. A second token is used when a test needs another owner. Cross-user portfolio IDs are expected to return **404**.
 
-PostgreSQL integration tests run `alembic upgrade head`, then write inside a connection transaction that is rolled back. They are skipped when Postgres is unreachable (`make up` publishes it on `localhost:15432`). SQLite still covers the same ledger math; the Postgres tests specifically exercise `ON CONFLICT` upserts and `NUMERIC` storage.
+PostgreSQL integration tests run `alembic upgrade head`, then write inside a connection transaction that is rolled back. They are skipped when Postgres is unreachable (`make up` publishes it on `localhost:15432`). SQLite still covers the same ledger math; the Postgres tests specifically exercise `ON CONFLICT` upserts, `NUMERIC` storage, skipped invalid bars, and one-ticker provider failure that does not abort the rest.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs `ruff` and `pytest` on every push and pull request against a Postgres 16 service on port `15432`, so integration tests are not skipped in CI. The separate `market-data.yml` workflow stays a manual ingest job.
 
 ```bash
 make test
 make lint
 ```
 
-## Running Locally
+## Local development
 
-### Docker Compose (preferred)
-
-```bash
-docker compose up --build
-# or: make up
-make migrate
-make seed
-```
-
-Then:
-
-- Health: http://127.0.0.1:18421/health
-- OpenAPI: http://127.0.0.1:18421/docs
-- Demo UI: http://127.0.0.1:18421/ui/
-- Live dashboard: http://127.0.0.1:3000/ (`make web`, with `make quote-worker` for moving prices)
-- Redis: `localhost:16379` (cache protocol, not HTTP)
-
-Stop with `make down`.
+Quick start is under [Setup](#setup) and [Usage](#usage). This section keeps host details, screenshots, and environment variables.
 
 ### Tests and lint (host)
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-make test
-make lint
-```
 
 `make test` runs the unit, API, and integration suites described in [Testing](#testing). On 14 October 2026, with PostgreSQL 16.15 listening on `localhost:15432`, the result was **177 passed, 0 skipped**. `/health` still does not open a database connection. The Next.js production build is `npm --prefix web run build`. Playwright smoke tests in `web/tests` mock the API and cover login, watchlist search, a live quote, and an axe check. They are not part of `make test`.
 
