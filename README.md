@@ -1,6 +1,6 @@
 # Portfolytix
 
-Portfolio workspace for personal holdings, with analytics and plain-language explanations.
+Portfolio workspace for personal holdings, with analytics and plain-language answers.
 
 ## Overview
 
